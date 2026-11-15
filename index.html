@@ -47,7 +47,7 @@
 <div id="app" class="hidden">
   <header class="bg-emerald-900 text-white">
     <div class="max-w-6xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
-      <div><div class="font-bold text-lg leading-tight">Diamond Portal</div><div id="who" class="text-xs text-emerald-200"></div></div>
+      <div><div id="ttl" class="font-bold text-lg leading-tight">Diamond Portal</div><div id="who" class="text-xs text-emerald-200"></div></div>
       <div id="hdr" class="flex flex-wrap items-center gap-2"></div>
     </div>
   </header>
@@ -58,7 +58,8 @@
 
 <script>
 const db = window.supabase.createClient('https://srxptffjytjzyobafmkv.supabase.co','sb_publishable_6d3TQR4H_CwT9j1Wg9cMUA_kSkcKYxf');
-const S = {user:null,profile:null,mem:[],myTeams:[],team:null,teams:[],set:{},perms:{},rules:[],exc:[],slots:[],mine:[],all:[],tab:'open',f:{date:'',park:'',tier:''},cal:false,cm:new Date(),pend:0,sf:{status:'',park:'',from:''}};
+const newF = () => ({ from: '', to: '', park: '', tier: '', days: [1,2,3,4,5,6,7] });
+const S = {user:null,profile:null,mem:[],myTeams:[],team:null,teams:[],set:{},perms:{},rules:[],exc:[],slots:[],mine:[],all:[],tab:'open',f:newF(),mf:{past:false,future:true,diamond:'',status:''},uf:{q:'',team:'',group:''},aid:null,assoc:null,assocs:[],role:'user',au:null,dm:[],inv:[],cal:false,cm:new Date(),pend:0,sf:{status:'',park:'',from:''}};
 const V = {};
 const $ = i => document.getElementById(i);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
@@ -67,7 +68,7 @@ const today = () => ymd(new Date());
 const addDays = n => { const d = new Date(); d.setDate(d.getDate() + n); return d; };
 const D = s => { const [y,m,d] = s.split('-'); return new Date(y,m-1,d).toLocaleDateString('en-CA',{weekday:'short',month:'short',day:'numeric'}); };
 const T = s => { let [h,m] = s.split(':'); h = +h; return `${h%12||12}:${m} ${h>=12?'PM':'AM'}`; };
-const isAdmin = () => S.profile?.role === 'admin';
+const isAdmin = () => S.role === 'admin' || !!S.profile?.is_developer;
 const can = k => isAdmin() || !!S.perms[k];
 const dl = (txt,name,type) => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([txt],{type})); a.download = name; a.click(); };
 const modal = h => { $('mbody').innerHTML = h; $('modal').classList.remove('hidden'); };
@@ -85,11 +86,13 @@ const fld = (l, h) => `<div><label class="lbl">${l}</label>${h}</div>`;
 const tierSel = (id, v) => `<select id="${id}" class="inp">${TIERS.map(t => `<option ${t===v?'selected':''}>${t}</option>`).join('')}</select>`;
 const mapLink = p => `<a class="text-xs text-emerald-800 underline" target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(p)}">map</a>`;
 function canUse(t, s) {
-  if (!t || !t.division) return true;
-  const e = S.exc.find(x => x.park_name === s.park_name && x.diamond_number === s.diamond_number && x.division === t.division);
+  if (!t) return true;
+  const ex = f => S.exc.find(x => x.park_name === s.park_name && x.diamond_number === s.diamond_number && f(x));
+  let e = ex(x => x.team_id === t.id); if (!e && t.division) e = ex(x => !x.team_id && x.division === t.division);
   if (e) return e.allow;
-  const r = S.rules.find(x => x.division === t.division && x.tier === s.tier);
-  return r ? r.allowed : true;
+  if (!t.division) return true;
+  const r = S.rules.find(x => x.division === t.division && x.tier === s.tier); if (!r) return true;
+  return s.start_time.slice(0, 5) >= (S.set.late_start || '20:30').slice(0, 5) ? r.allowed_late : r.allowed;
 }
 function toast(m, err) {
   const t = $('toast');
@@ -169,27 +172,52 @@ async function boot(session) {
   const { data: p } = await db.from('profiles').select('*').eq('id', S.user.id).maybeSingle();
   if (!p) { toast('Profile not found. Contact an administrator.', 1); return db.auth.signOut(); }
   S.profile = p;
+  const { data: as } = await db.from('associations').select('*').order('name');
+  S.assocs = as || [];
+  if (!S.assocs.length) {
+    if (!p.is_developer) return showJoinAssoc();
+    Object.assign(S, { aid: null, assoc: null, role: 'admin', perms: {}, team: null, myTeams: [], mem: [], set: {}, au: null, tab: 'plat' });
+    return showApp();
+  }
+  if (!S.assocs.find(a => a.id === p.active_assoc_id)) { await db.rpc('set_active_assoc', { p_assoc: S.assocs[0].id }); p.active_assoc_id = S.assocs[0].id; }
+  S.aid = p.active_assoc_id; S.assoc = S.assocs.find(a => a.id === S.aid);
+  const { data: au } = await db.from('assoc_users').select('*').eq('user_id', S.user.id).eq('association_id', S.aid).maybeSingle();
+  S.au = au; S.role = p.is_developer ? 'admin' : (au?.role || 'user');
   await Promise.all([loadMem(), loadSet(), loadTeams(), loadPerms(), loadRules()]);
   if (can('approve_members')) await pending();
-  if (p.role === 'user' && !S.team) return showOnboard();
+  if (S.role === 'user' && !S.team) return showOnboard();
   if (S.tab === 'open' && can('view_dashboard')) S.tab = 'dash';
+  if (!TABS.some(t => t[0] === S.tab && showTab(t))) S.tab = 'open';
   showApp();
+}
+function showJoinAssoc() {
+  const o = $('onboard'); o.classList.remove('hidden');
+  o.innerHTML = `<div class="card space-y-4"><div class="flex justify-between items-center"><h1 class="font-bold text-xl text-emerald-900">Join your association</h1><button class="btn2" onclick="db.auth.signOut()">Sign out</button></div>
+    <p class="text-sm text-slate-600">Signed in as ${esc(S.user.email)}. Enter the join code your association gave you.</p>
+    ${fld('Join code', `<input id="j-code" class="inp uppercase" value="${esc(new URLSearchParams(location.search).get('a') || '')}">`)}<button class="btn" onclick="joinAssoc()">Continue</button></div>`;
+}
+async function joinAssoc() {
+  if (await rpc('join_association', { p_code: $('j-code').value })) { const { data } = await db.auth.getSession(); boot(data.session); }
 }
 async function loadMem() {
   const { data } = await db.from('team_members').select('*,teams(id,name,division,tokens_remaining)').eq('user_id', S.user.id);
   S.mem = data || [];
   S.myTeams = S.mem.filter(m => m.status === 'approved').map(m => m.teams);
-  S.team = S.myTeams.find(t => t.id === S.profile.active_team_id) || S.myTeams[0] || null;
+  S.team = S.myTeams.find(t => t.id === S.au?.active_team_id) || S.myTeams[0] || null;
 }
 async function loadSet() { const { data } = await db.from('settings').select('*'); S.set = Object.fromEntries((data || []).map(r => [r.key, r.value])); }
 async function loadTeams() { const { data } = await db.from('teams').select('*').order('name'); S.teams = data || []; }
 async function loadPerms() {
-  const { data } = await db.from('permissions').select('*').eq('role', S.profile.role);
+  const { data } = await db.from('permissions').select('*').eq('role', S.role);
   S.perms = Object.fromEntries((data || []).filter(x => x.allowed).map(x => [x.perm, 1]));
 }
 async function loadRules() {
   const [a, b] = await Promise.all([db.from('tier_rules').select('*'), db.from('diamond_exceptions').select('*')]);
   S.rules = a.data || []; S.exc = b.data || [];
+}
+async function loadMaster() {
+  const { data } = await db.from('diamond_master').select('*');
+  S.dm = (data || []).sort((a, b) => (a.park_name + ' ' + a.diamond_number).localeCompare(b.park_name + ' ' + b.diamond_number, undefined, { numeric: true }));
 }
 async function pending() {
   const { count } = await db.from('team_members').select('id', { count: 'exact', head: true }).eq('status', 'pending');
@@ -218,31 +246,41 @@ function showOnboard() {
 }
 async function reqTeam() {
   const id = $('j-team')?.value; if (!id) return;
-  if (await rpc('request_team', { p_team_id: id })) { await loadMem(); closeModal(); (S.profile.role === 'user' && !S.team) ? showOnboard() : (showApp(), joinModal()); }
+  if (await rpc('request_team', { p_team_id: id })) { await loadMem(); closeModal(); (S.role === 'user' && !S.team) ? showOnboard() : (showApp(), joinModal()); }
 }
 function joinModal() { modal(`<div class="space-y-4"><div class="flex justify-between"><h3 class="font-bold text-lg">Join another team</h3><button class="btn2" onclick="closeModal()">Close</button></div>${joinForm()}${memList()}</div>`); }
 
 /* ---------- APP SHELL ---------- */
-const TABS = [['open','Open diamonds'],['mine','My bookings'],['dash','Dashboard','view_dashboard'],['appr','Approvals','approve_members'],['sched','Schedule','view_schedule'],['slots','Add slots','add_slots'],['teams','Teams','manage_teams'],['cred','Credits','add_credits'],['users','Users','manage_users'],['dia','Diamonds','manage_rules'],['set','Settings','manage_rules'],['acc','Access control','ADMIN'],['aud','Audit log','view_audit']];
-const showTab = t => !t[2] || (t[2] === 'ADMIN' ? isAdmin() : can(t[2]));
+// Everyday tabs on the left; one-time / seasonal setup tabs (flag 1) on the right.
+const TABS = [['open','Open diamonds'],['mine','My bookings'],['dash','Dashboard','view_dashboard'],['sched','Schedule','view_schedule'],['appr','Approvals','approve_members'],['cred','Credits','add_credits'],['slots','Add slots','add_slots'],['users','Users','manage_users'],
+  ['teams','Teams','manage_teams',1],['dm','Diamond Master','manage_diamonds',1],['dia','Age & Time Restrictions','manage_rules',1],['set','Settings','manage_rules',1],['acc','Access control','ADMIN',1],['aud','Audit log','view_audit',1],['plat','Platform','DEV',1]];
+const showTab = t => t[2] === 'DEV' ? !!S.profile?.is_developer : (!!S.aid && (!t[2] || (t[2] === 'ADMIN' ? isAdmin() : can(t[2]))));
 function showApp() {
   ['auth','onboard'].forEach(x => $(x).classList.add('hidden')); $('app').classList.remove('hidden');
   header(); tabs(); banner(); go(S.tab);
 }
 function header() {
-  $('who').textContent = `${S.profile.email} (${S.profile.role})`;
+  $('ttl').textContent = S.assoc?.name || 'Diamond Portal';
+  $('who').textContent = `${S.profile.email} (${S.profile.is_developer ? 'developer' : S.role})`;
+  const asel = S.assocs.length > 1 ? `<select class="rounded-lg px-2 py-1 text-sm text-slate-900" onchange="switchAssoc(this.value)">${S.assocs.map(a => `<option value="${a.id}" ${a.id===S.aid?'selected':''}>${esc(a.name)}</option>`).join('')}</select>` : '';
   const sel = S.myTeams.length ? `<select class="rounded-lg px-2 py-1 text-sm text-slate-900" onchange="switchTeam(this.value)">${S.myTeams.map(t => `<option value="${t.id}" ${t.id===S.team?.id?'selected':''}>${esc(t.name)}</option>`).join('')}</select>
     <span class="tag bg-amber-300 text-slate-900">${S.team?.tokens_remaining ?? 0} credits</span>` : '';
-  $('hdr').innerHTML = `${sel}<button class="btn2 !py-1" onclick="joinModal()">Join a team</button><button class="btn2 !py-1" onclick="db.auth.signOut()">Sign out</button>`;
+  $('hdr').innerHTML = `${asel}${sel}${S.aid ? '<button class="btn2 !py-1" onclick="joinModal()">Join a team</button>' : ''}<button class="btn2 !py-1" onclick="db.auth.signOut()">Sign out</button>`;
 }
 function tabs() {
-  $('tabs').innerHTML = TABS.filter(showTab).map(t =>
-    `<button onclick="go('${t[0]}')" class="px-3 py-3 text-sm font-semibold whitespace-nowrap border-b-2 ${S.tab===t[0]?'border-emerald-800 text-emerald-900':'border-transparent text-slate-600'}">${t[1]}${t[0]==='appr'&&S.pend?` <span class="tag bg-amber-400 text-slate-900">${S.pend}</span>`:''}</button>`).join('');
+  let sep = false;
+  $('tabs').innerHTML = TABS.filter(showTab).map(t => {
+    const b = t[3] && !sep ? (sep = true, ' ml-3 border-l border-slate-300 pl-3') : '';
+    return `<button onclick="go('${t[0]}')" class="px-3 py-3 text-sm font-semibold whitespace-nowrap border-b-2 ${b} ${S.tab===t[0]?'border-emerald-800 text-emerald-900':'border-transparent text-slate-600'}">${t[1]}${t[0]==='appr'&&S.pend?` <span class="tag bg-amber-400 text-slate-900">${S.pend}</span>`:''}</button>`;
+  }).join('');
 }
 function banner() { $('banner').innerHTML = S.set.announcement ? `<div class="bg-amber-100 text-amber-900 text-sm text-center py-2 px-4">${esc(S.set.announcement)}</div>` : ''; }
 async function go(t) { S.tab = t; tabs(); $('view').innerHTML = '<p class="text-slate-500 p-6">Loading...</p>'; await V[t](); }
 async function switchTeam(id) {
-  if (await rpc('set_active_team', { p_team_id: id })) { S.profile.active_team_id = id; await loadMem(); header(); go(S.tab); }
+  if (await rpc('set_active_team', { p_team_id: id })) { if (S.au) S.au.active_team_id = id; await loadMem(); header(); go(S.tab); }
+}
+async function switchAssoc(id) {
+  if (await rpc('set_active_assoc', { p_assoc: id })) { S.tab = 'open'; const { data } = await db.auth.getSession(); boot(data.session); }
 }
 
 /* ---------- OPEN DIAMONDS (rows) ---------- */
@@ -252,21 +290,28 @@ async function loadSlots() {
   if (error) return toast(error.message, 1);
   S.slots = data || [];
 }
-V.open = async () => { await Promise.all([loadSlots(), loadRules()]); drawOpen(); };
+V.open = async () => { await Promise.all([loadSlots(), loadRules(), loadSet()]); drawOpen(); };
+const WD = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+const isoDow = s => { const [y, m, d] = s.split('-'); const g = new Date(y, m - 1, d).getDay(); return g === 0 ? 7 : g; };
+function openFiltered() {
+  const f = S.f;
+  return S.slots.filter(s => (!f.park || s.park_name === f.park) && (!f.tier || s.tier === f.tier) && (!f.from || s.date >= f.from) && (!f.to || s.date <= f.to) && f.days.includes(isoDow(s.date)));
+}
+function toggleDay(n, on) { S.f.days = on ? [...new Set([...S.f.days, n])] : S.f.days.filter(x => x !== n); drawOpen(); }
 function drawOpen() {
-  const f = S.f, parks = [...new Set(S.slots.map(s => s.park_name))].sort();
-  const base = S.slots.filter(s => (!f.park || s.park_name === f.park) && (!f.tier || s.tier === f.tier));
-  const list = f.date ? base.filter(s => s.date === f.date) : base;
+  const f = S.f, parks = [...new Set(S.slots.map(s => s.park_name))].sort(), list = openFiltered();
   const act = s => !S.team ? '<span class="text-xs text-amber-700">Join a team</span>'
-    : !canUse(S.team, s) ? `<span class="text-xs text-slate-500">Not open to ${esc(S.team.division || 'your team')}</span>`
+    : !canUse(S.team, s) ? '<span class="text-xs text-slate-500">Not open to your age group at this time</span>'
     : `<button class="btn" onclick="bookModal('${s.id}')">Book</button>`;
-  $('view').innerHTML = `<div class="card grid md:grid-cols-5 gap-3 items-end mb-4">
-    ${fld('Date', `<input type="date" class="inp" value="${f.date}" min="${today()}" onchange="S.f.date=this.value;S.cal=false;drawOpen()">`)}
+  $('view').innerHTML = `<div class="card mb-4 space-y-3"><div class="grid md:grid-cols-6 gap-3 items-end">
+    ${fld('From', `<input type="date" class="inp" value="${f.from}" min="${today()}" onchange="S.f.from=this.value;S.cal=false;drawOpen()">`)}
+    ${fld('To', `<input type="date" class="inp" value="${f.to}" min="${today()}" onchange="S.f.to=this.value;S.cal=false;drawOpen()">`)}
     ${fld('Park', `<select class="inp" onchange="S.f.park=this.value;drawOpen()"><option value="">All parks</option>${parks.map(p => `<option ${p===f.park?'selected':''}>${esc(p)}</option>`).join('')}</select>`)}
     ${fld('Level', `<select class="inp" onchange="S.f.tier=this.value;drawOpen()"><option value="">All levels</option>${TIERS.map(t => `<option ${t===f.tier?'selected':''}>${t}</option>`).join('')}</select>`)}
-    <button class="btn2" onclick="S.f={date:'',park:'',tier:''};drawOpen()">Clear filters</button>
+    <button class="btn2" onclick="S.f=newF();drawOpen()">Clear filters</button>
     <div class="flex gap-1"><button class="${!S.cal?'btn':'btn2'} flex-1" onclick="S.cal=false;drawOpen()">List</button><button class="${S.cal?'btn':'btn2'} flex-1" onclick="S.cal=true;drawOpen()">Calendar</button></div></div>
-    ${S.cal ? calHTML(base) : tbl(['Date','Time','Diamond','Level','Credits',''], list.slice(0,400).map(s => row(
+    <div class="flex flex-wrap gap-4 text-sm"><span class="font-semibold text-slate-600">Days:</span>${WD.map((n, i) => `<label><input type="checkbox" ${f.days.includes(i+1)?'checked':''} onchange="toggleDay(${i+1},this.checked)"> ${n}</label>`).join('')}</div></div>
+    ${S.cal ? calHTML(list) : tbl(['Date','Time','Diamond','Level','Credits',''], list.slice(0,400).map(s => row(
       `<td class="td whitespace-nowrap font-medium">${D(s.date)}</td><td class="td whitespace-nowrap">${T(s.start_time)} - ${T(s.end_time)}</td>
        <td class="td">${esc(s.park_name)} #${esc(s.diamond_number)} ${mapLink(s.park_name)}</td><td class="td">${tier(s)}</td><td class="td">${cost(s)}</td><td class="td text-right">${act(s)}</td>`)),
       'No open diamonds match these filters.')}`;
@@ -277,7 +322,7 @@ function calHTML(L) {
   let c = ''; for (let i = 0; i < first.getDay(); i++) c += '<div></div>';
   for (let d = 1; d <= n; d++) {
     const k = `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`, k2 = cnt[k];
-    c += `<button ${k2?`onclick="S.f.date='${k}';S.cal=false;drawOpen()"`:'disabled'} class="border rounded-lg p-1.5 h-16 text-left ${k2?'bg-emerald-50 border-emerald-300 hover:bg-emerald-100':'bg-slate-50 text-slate-400'}"><div class="text-xs">${d}</div>${k2?`<div class="text-sm font-bold text-emerald-800">${k2} open</div>`:''}</button>`;
+    c += `<button ${k2?`onclick="S.f.from='${k}';S.f.to='${k}';S.cal=false;drawOpen()"`:'disabled'} class="border rounded-lg p-1.5 h-16 text-left ${k2?'bg-emerald-50 border-emerald-300 hover:bg-emerald-100':'bg-slate-50 text-slate-400'}"><div class="text-xs">${d}</div>${k2?`<div class="text-sm font-bold text-emerald-800">${k2} open</div>`:''}</button>`;
   }
   return `<div class="card"><div class="flex justify-between items-center mb-3"><button class="btn2" onclick="S.cm=new Date(${y},${m-1},1);drawOpen()">&lt;</button><b>${first.toLocaleDateString('en-CA',{month:'long',year:'numeric'})}</b><button class="btn2" onclick="S.cm=new Date(${y},${m+1},1);drawOpen()">&gt;</button></div>
     <div class="grid grid-cols-7 gap-1 text-center text-xs font-semibold text-slate-500 mb-1">${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(x => `<div>${x}</div>`).join('')}</div><div class="grid grid-cols-7 gap-1">${c}</div></div>`;
@@ -287,7 +332,7 @@ function bookModal(id) {
   modal(`<h3 class="font-bold text-lg mb-2">Book this diamond</h3>
     <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm mb-3"><b>${esc(s.park_name)} #${esc(s.diamond_number)}</b> ${tier(s)}<br>${D(s.date)}, ${T(s.start_time)} - ${T(s.end_time)}</div>
     <p class="text-sm mb-2">Booking for <b>${esc(S.team.name)}</b> (${S.team.tokens_remaining} credits)</p>
-    ${fld('Reason', `<select id="b-r" class="inp mb-3" onchange="$('b-c').textContent=calc(window._s,this.value)"><option>Practice</option><option>Exhibition Game</option><option value="Rainout">Rainout</option></select>`)}
+    ${fld('Event type', `<select id="b-r" class="inp mb-3" onchange="$('b-c').textContent=calc(window._s,this.value)"><option>Practice</option><option>Exhibition Game</option><option value="Rainout">Rainout</option></select>`)}
     <p class="text-sm mb-4">Cost: <b id="b-c">${calc(s,'Practice')}</b> credit(s). Free cancellation until ${S.set.cancel_hours} hours before start.</p>
     <div class="flex gap-2"><button class="btn2 w-1/2" onclick="closeModal()">Cancel</button><button class="btn w-1/2" onclick="doBook('${id}')">Confirm booking</button></div>`);
 }
@@ -302,14 +347,25 @@ V.mine = async () => {
   const [{ data: b }, { data: l }] = await Promise.all([
     db.from('diamonds').select('*').eq('booked_by_team_id', S.team.id).order('date').order('start_time'),
     db.from('token_ledger').select('*').eq('team_id', S.team.id).order('created_at', { ascending: false }).limit(40)]);
-  S.mine = b || [];
-  $('view').innerHTML = `<h2 class="font-bold text-lg mb-2">${esc(S.team.name)}: bookings</h2>
-  ${tbl(['Date','Where','Reason','Cost','Status',''], S.mine.map(d => row(`<td class="td">${D(d.date)}<br><span class="text-xs text-slate-500">${T(d.start_time)} - ${T(d.end_time)}</span></td>
-    <td class="td">${esc(d.park_name)} #${esc(d.diamond_number)} ${tier(d)}</td><td class="td">${esc(d.booking_reason)}</td><td class="td">${d.token_cost ?? 0}</td><td class="td">${stTag(d.status)}</td>
-    <td class="td text-right whitespace-nowrap"><button class="btng" onclick="ics('${d.id}')">Add to calendar</button>${d.status==='Booked'&&d.date>=today()?` <button class="btnr" onclick="cancelB('${d.id}')">Cancel</button>`:''}</td>`)), 'No bookings yet. Find a slot under Open diamonds.')}
-  <h2 class="font-bold text-lg mt-6 mb-2">Credit history <span class="text-sm font-normal text-slate-500">(balance: ${S.team.tokens_remaining})</span></h2>
-  ${tbl(['Date','Reason','Credits'], (l || []).map(r => row(`<td class="td text-slate-500 whitespace-nowrap">${new Date(r.created_at).toLocaleDateString('en-CA')}</td><td class="td">${esc(r.reason)}</td><td class="td font-bold ${r.delta<0?'text-red-700':'text-emerald-700'}">${r.delta>0?'+':''}${r.delta}</td>`)), 'No activity yet.')}`;
+  S.mine = b || []; S.ledger = l || []; drawMine();
 };
+function drawMine() {
+  const f = S.mf, t = today(), key = d => `${d.park_name} #${d.diamond_number}`;
+  const dias = [...new Set(S.mine.map(key))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  const L = S.mine.filter(d => ((f.past && d.date < t) || (f.future && d.date >= t)) && (!f.diamond || key(d) === f.diamond) && (!f.status || d.status === f.status));
+  $('view').innerHTML = `<h2 class="font-bold text-lg mb-2">${esc(S.team.name)}: bookings</h2>
+  <div class="card mb-4 flex flex-wrap items-end gap-x-6 gap-y-3 text-sm">
+    <label><input type="checkbox" ${f.past?'checked':''} onchange="S.mf.past=this.checked;drawMine()"> Past bookings</label>
+    <label><input type="checkbox" ${f.future?'checked':''} onchange="S.mf.future=this.checked;drawMine()"> Future bookings</label>
+    <div class="w-48">${fld('Diamond', `<select class="inp" onchange="S.mf.diamond=this.value;drawMine()"><option value="">All diamonds</option>${dias.map(x => `<option ${x===f.diamond?'selected':''}>${esc(x)}</option>`).join('')}</select>`)}</div>
+    <div class="w-40">${fld('Status', `<select class="inp" onchange="S.mf.status=this.value;drawMine()"><option value="">All</option>${['Booked','Rainout'].map(x => `<option ${x===f.status?'selected':''}>${x}</option>`).join('')}</select>`)}</div></div>
+  ${tbl(['Date','Where','Event type','Cost','Status',''], L.map(d => row(`<td class="td">${D(d.date)}<br><span class="text-xs text-slate-500">${T(d.start_time)} - ${T(d.end_time)}</span></td>
+    <td class="td">${esc(d.park_name)} #${esc(d.diamond_number)} ${tier(d)}</td><td class="td">${esc(d.booking_reason)}</td><td class="td">${d.token_cost ?? 0}</td><td class="td">${stTag(d.status)}</td>
+    <td class="td text-right whitespace-nowrap"><button class="btng" onclick="ics('${d.id}')">Add to calendar</button>${d.status==='Booked'&&d.date>=t?` <button class="btnr" onclick="cancelB('${d.id}')">Cancel</button>`:''}</td>`)),
+    !f.past && !f.future ? 'Tick Past bookings and/or Future bookings to see them.' : 'No bookings match. Find a slot under Open diamonds.')}
+  <h2 class="font-bold text-lg mt-6 mb-2">Credit history <span class="text-sm font-normal text-slate-500">(balance: ${S.team.tokens_remaining})</span></h2>
+  ${tbl(['Date','Reason','Credits'], S.ledger.map(r => row(`<td class="td text-slate-500 whitespace-nowrap">${new Date(r.created_at).toLocaleDateString('en-CA')}</td><td class="td">${esc(r.reason)}</td><td class="td font-bold ${r.delta<0?'text-red-700':'text-emerald-700'}">${r.delta>0?'+':''}${r.delta}</td>`)), 'No activity yet.')}`;
+}
 async function cancelB(id) {
   if (!confirm(`Cancel this booking? Credits are refunded only if you cancel at least ${S.set.cancel_hours} hours before the start time.`)) return;
   await rpc('release_diamond', { p_diamond_id: id, p_mode: 'cancel' }); await loadMem(); header(); V.mine();
@@ -395,7 +451,7 @@ function assignModal(id) {
   const s = S.all.find(x => x.id === id); window._s = s;
   modal(`<h3 class="font-bold text-lg mb-2">Assign this slot to a team</h3><div class="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm mb-3"><b>${esc(s.park_name)} #${esc(s.diamond_number)}</b> ${tier(s)}<br>${D(s.date)}, ${T(s.start_time)} - ${T(s.end_time)}</div>
     <div class="space-y-3">${fld('Team', `<select id="as-t" class="inp">${S.teams.filter(t => t.active).map(t => `<option value="${t.id}">${esc(t.name)} (${t.tokens_remaining} credits)</option>`).join('')}</select>`)}
-    ${fld('Reason', `<select id="as-r" class="inp" onchange="$('as-c').textContent=calc(window._s,this.value)"><option>Practice</option><option>Exhibition Game</option><option value="Rainout">Rainout</option></select>`)}
+    ${fld('Event type', `<select id="as-r" class="inp" onchange="$('as-c').textContent=calc(window._s,this.value)"><option>Practice</option><option>Exhibition Game</option><option value="Rainout">Rainout</option></select>`)}
     <label class="text-sm flex gap-2"><input type="checkbox" id="as-ch" checked> Charge <b id="as-c">${calc(s,'Practice')}</b> credit(s) to the team</label></div>
     <div class="flex gap-2 mt-4"><button class="btn2 w-1/2" onclick="closeModal()">Cancel</button><button class="btn w-1/2" onclick="doAssign('${id}')">Assign</button></div>`);
 }
@@ -420,37 +476,39 @@ function exportCSV() {
 /* ---------- ADD SLOTS (manual + CSV) ---------- */
 let csvRows = [];
 V.slots = async () => {
-  const { data } = await db.from('diamonds').select('park_name').limit(2000);
-  const parks = [...new Set((data || []).map(x => x.park_name))].sort(), wd = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  await loadMaster();
+  const act = S.dm.filter(x => x.active), wd = WD;
   $('view').innerHTML = `<div class="card mb-5"><h2 class="font-bold text-lg mb-1">Add slots manually</h2>
-    <p class="text-xs text-slate-500 mb-3">Choose a date range and the weekdays the diamond is available. For a single day, use the same From and To date.</p>
-    <datalist id="parks">${parks.map(p => `<option value="${esc(p)}">`).join('')}</datalist>
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-3">${fld('Park', '<input id="g-park" list="parks" class="inp">')}${fld('Diamond number', '<input id="g-num" class="inp">')}${fld('Level', tierSel('g-tier','Standard'))}<div></div>
-      ${fld('From date', '<input id="g-from" type="date" class="inp">')}${fld('To date', '<input id="g-to" type="date" class="inp">')}${fld('Start time', '<input id="g-s" type="time" value="18:30" class="inp">')}${fld('End time', '<input id="g-e" type="time" value="20:30" class="inp">')}</div>
+    <p class="text-xs text-slate-500 mb-3">Diamonds and their levels come from the Diamond Master tab. Choose a date range and the weekdays the diamond is available. For a single day, use the same From and To date.</p>
+    ${act.length ? `<div class="grid grid-cols-2 md:grid-cols-4 gap-3">${fld('Diamond', `<select id="g-d" class="inp">${act.map(x => `<option value="${x.id}">${esc(x.park_name)} #${esc(x.diamond_number)} (${x.tier})</option>`).join('')}</select>`)}
+      ${fld('From date', '<input id="g-from" type="date" class="inp">')}${fld('To date', '<input id="g-to" type="date" class="inp">')}<div></div>
+      ${fld('Start time', '<input id="g-s" type="time" value="18:30" class="inp">')}${fld('End time', '<input id="g-e" type="time" value="20:30" class="inp">')}</div>
     <div class="flex flex-wrap gap-3 mt-3 text-sm">${wd.map((n, i) => `<label><input type="checkbox" class="g-wd" value="${i+1}" checked> ${n}</label>`).join('')}</div>
-    <button class="btn mt-3" onclick="genSlots()">Create slots</button></div>
+    <button class="btn mt-3" onclick="genSlots()">Create slots</button>` : '<p class="text-sm text-amber-700">Add your diamonds under Diamond Master first.</p>'}</div>
   <div class="card"><div class="flex flex-wrap justify-between gap-3 mb-3"><div><h2 class="font-bold text-lg">Add slots from a CSV</h2>
-    <p class="text-sm text-slate-600">Columns: <code class="bg-slate-100 px-1 rounded">park_name, diamond_number, date, start_time, end_time, tier</code>. Tier is Practice, Standard, Premium or Lit (blank means Standard). Dates as YYYY-MM-DD, times as HH:MM (24 hour). Duplicates are skipped.</p></div>
+    <p class="text-sm text-slate-600">Columns: <code class="bg-slate-100 px-1 rounded">park_name, diamond_number, date, start_time, end_time, tier</code>. Each diamond must exist in Diamond Master. Tier is optional (blank uses the diamond's level). Dates as YYYY-MM-DD, times as HH:MM (24 hour). Duplicates are skipped.</p></div>
     <button class="btn2 self-start" onclick="sampleCSV()">Download sample</button></div>
     <input type="file" accept=".csv" onchange="readSlotCSV(event)" class="text-sm"><div id="csv-out" class="mt-4"></div></div>`;
 };
 async function genSlots() {
-  const wds = [...document.querySelectorAll('.g-wd:checked')].map(x => +x.value);
-  const a = { p_park: $('g-park').value.trim(), p_diamond: $('g-num').value.trim(), p_tier: $('g-tier').value, p_from: $('g-from').value, p_to: $('g-to').value, p_weekdays: wds, p_start: $('g-s').value, p_end: $('g-e').value };
-  if (!a.p_park || !a.p_diamond || !a.p_from || !a.p_to || !wds.length || a.p_end <= a.p_start) return toast('Fill in park, diamond, dates, weekdays and a valid time range.', 1);
+  const x = S.dm.find(m => m.id === $('g-d').value), wds = [...document.querySelectorAll('.g-wd:checked')].map(v => +v.value);
+  const a = { p_park: x.park_name, p_diamond: x.diamond_number, p_tier: x.tier, p_from: $('g-from').value, p_to: $('g-to').value, p_weekdays: wds, p_start: $('g-s').value, p_end: $('g-e').value };
+  if (!a.p_from || !a.p_to || !wds.length || a.p_end <= a.p_start) return toast('Fill in the dates, weekdays and a valid time range.', 1);
   await rpc('generate_slots', a);
 }
 function sampleCSV() {
-  dl(`park_name,diamond_number,date,start_time,end_time,tier\nMeadowvale Sports Park,1,${today()},18:30,20:30,Lit\nLakefront Park,3,${today()},19:00,21:00,Premium\nRiverside Park,1,${today()},18:00,20:00,Practice\n`, 'sample_slots.csv', 'text/csv');
+  const x = S.dm[0] || { park_name: 'Meadowvale Sports Park', diamond_number: '1' };
+  dl(`park_name,diamond_number,date,start_time,end_time,tier\n${csvQ(x.park_name)},${csvQ(x.diamond_number)},${today()},18:30,20:30,\n${csvQ(x.park_name)},${csvQ(x.diamond_number)},${today()},20:30,22:00,Lit\n`, 'sample_slots.csv', 'text/csv');
 }
 function readSlotCSV(e) {
   const f = e.target.files[0]; if (!f) return;
   readObjs(f, objs => {
     csvRows = objs.map((o, i) => {
       const pad = t => /^\d{1,2}:\d{2}/.test(t) ? t.slice(0,5).padStart(5,'0') : '';
-      const tr = TIERS.find(t => t.toLowerCase() === (o.tier || 'standard').toLowerCase());
-      const r = { park_name: o.park_name, diamond_number: o.diamond_number, date: o.date, start_time: pad(o.start_time), end_time: pad(o.end_time), tier: tr }, bad = [];
-      if (!r.park_name) bad.push('park missing'); if (!r.diamond_number) bad.push('diamond missing'); if (!tr) bad.push('bad level');
+      const m = S.dm.find(x => x.park_name.toLowerCase() === (o.park_name || '').toLowerCase() && x.diamond_number.toLowerCase() === (o.diamond_number || '').toLowerCase());
+      const tr = o.tier ? TIERS.find(t => t.toLowerCase() === o.tier.toLowerCase()) : m?.tier;
+      const r = { association_id: S.aid, park_name: m?.park_name || o.park_name, diamond_number: m?.diamond_number || o.diamond_number, date: o.date, start_time: pad(o.start_time), end_time: pad(o.end_time), tier: tr }, bad = [];
+      if (!m) bad.push('diamond not in Diamond Master'); if (o.tier && !tr) bad.push('bad level');
       if (!/^\d{4}-\d{2}-\d{2}$/.test(r.date) || isNaN(new Date(r.date))) bad.push('bad date');
       if (!r.start_time || !r.end_time) bad.push('bad time'); else if (r.end_time <= r.start_time) bad.push('end before start');
       return { n: i + 2, r, bad };
@@ -463,7 +521,7 @@ function readSlotCSV(e) {
 }
 async function doImport() {
   const rows = csvRows.filter(x => !x.bad.length).map(x => x.r);
-  const { data, error } = await db.from('diamonds').upsert(rows, { onConflict: 'park_name,diamond_number,date,start_time', ignoreDuplicates: true }).select('id');
+  const { data, error } = await db.from('diamonds').upsert(rows, { onConflict: 'association_id,park_name,diamond_number,date,start_time', ignoreDuplicates: true }).select('id');
   if (error) return toast(error.message, 1);
   audit('CSV import', `${data.length} added, ${rows.length - data.length} duplicates skipped`);
   toast(`${data.length} slots added. ${rows.length - data.length} duplicates skipped.`); csvRows = []; V.slots();
@@ -503,7 +561,7 @@ function upTeams(e) {
     const have = new Set(S.teams.map(t => t.name.toLowerCase()));
     const rows = objs.filter(o => o.name).map(o => ({ name: o.name, division: o.division || null, cr: +o.credits || 0, isNew: !have.has(o.name.toLowerCase()) }));
     if (!rows.length || !confirm(`Import ${rows.length} team(s)? Existing names are updated; new teams are created.`)) return;
-    const { data, error } = await db.from('teams').upsert(rows.map(r => ({ name: r.name, division: r.division })), { onConflict: 'name' }).select();
+    const { data, error } = await db.from('teams').upsert(rows.map(r => ({ association_id: S.aid, name: r.name, division: r.division })), { onConflict: 'association_id,name' }).select();
     if (error) return toast(error.message, 1);
     if (can('add_credits')) for (const r of rows.filter(x => x.isNew && x.cr > 0)) { const t = data.find(x => x.name === r.name); if (t) await rpc('grant_tokens', { p_team_id: t.id, p_delta: r.cr, p_reason: 'Starting credits (CSV)' }); }
     audit('Teams CSV import', rows.length + ' rows'); toast(`${rows.length} team(s) processed.`); V.teams();
@@ -539,16 +597,48 @@ async function newSeason() {
 
 /* ---------- USERS ---------- */
 V.users = async () => {
-  const [{ data: u }, { data: m }] = await Promise.all([db.from('profiles').select('*').order('email'), db.from('team_members').select('id,user_id,status,teams(name)')]);
-  S.users = u; S.um = m || [];
-  $('view').innerHTML = `<h2 class="font-bold text-lg mb-2">Users</h2>${tbl(['User','Role','Teams',''], u.map(x => row(
-    `<td class="td">${esc(x.full_name || '')}<br><span class="text-xs text-slate-500">${esc(x.email)}</span></td><td class="td"><span class="tag ${x.role==='admin'?'bg-amber-100 text-amber-900':x.role==='scheduler'?'bg-blue-100 text-blue-800':'bg-slate-100 text-slate-700'}">${x.role}</span></td>
-     <td class="td">${esc(S.um.filter(y => y.user_id === x.id && y.status === 'approved').map(y => y.teams?.name).join(', ')) || '-'}</td><td class="td text-right"><button class="btn2 !py-1" onclick="editUser('${x.id}')">Edit</button></td>`)), 'No users.')}`;
+  const [{ data: u }, { data: m }, { data: iv }] = await Promise.all([
+    db.from('assoc_users').select('user_id,role,profiles(email,full_name)').eq('association_id', S.aid),
+    db.from('team_members').select('id,user_id,status,teams(id,name,division)'),
+    db.from('invites').select('*').order('email')]);
+  S.users = (u || []).map(x => ({ id: x.user_id, role: x.role, email: x.profiles?.email || '', full_name: x.profiles?.full_name || '' })).sort((a, b) => a.email.localeCompare(b.email));
+  S.um = m || []; S.inv = iv || []; await loadTeams();
+  const groups = [...new Set(S.teams.map(t => t.division).filter(Boolean))].sort();
+  $('view').innerHTML = `<div class="flex justify-between items-center mb-3"><h2 class="font-bold text-lg">Users</h2><button class="btn" onclick="addUserModal()">Add person</button></div>
+    <div class="card grid md:grid-cols-3 gap-3 mb-4">
+      ${fld('Search name or email', `<input class="inp" value="${esc(S.uf.q)}" oninput="S.uf.q=this.value;drawUserList()">`)}
+      ${fld('Team', `<select class="inp" onchange="S.uf.team=this.value;drawUserList()"><option value="">All teams</option>${S.teams.map(t => `<option value="${t.id}" ${t.id===S.uf.team?'selected':''}>${esc(t.name)}</option>`).join('')}</select>`)}
+      ${fld('Age group', `<select class="inp" onchange="S.uf.group=this.value;drawUserList()"><option value="">All groups</option>${groups.map(g => `<option ${g===S.uf.group?'selected':''}>${esc(g)}</option>`).join('')}</select>`)}</div>
+    <div id="ulist"></div>
+    ${S.inv.length ? `<h3 class="font-bold mt-6 mb-2">Waiting to create an account</h3>${tbl(['Email','Role',''], S.inv.map(x => row(`<td class="td">${esc(x.email)} <span class="text-xs text-slate-500">${esc(x.full_name || '')}</span></td><td class="td">${x.role}</td><td class="td text-right"><button class="btnr" onclick="rmInvite('${x.id}')">Remove</button></td>`)), '')}` : ''}`;
+  drawUserList();
 };
+const userTeams = id => S.um.filter(y => y.user_id === id && y.status === 'approved' && y.teams);
+function drawUserList() {
+  const f = S.uf, q = f.q.toLowerCase();
+  const L = S.users.filter(x => { const ms = userTeams(x.id);
+    return (!q || x.full_name.toLowerCase().includes(q) || x.email.toLowerCase().includes(q)) && (!f.team || ms.some(y => y.teams.id === f.team)) && (!f.group || ms.some(y => y.teams.division === f.group)); });
+  $('ulist').innerHTML = tbl(['User','Role','Teams (age group)',''], L.map(x => row(
+    `<td class="td">${esc(x.full_name)}<br><span class="text-xs text-slate-500">${esc(x.email)}</span></td>
+     <td class="td"><span class="tag ${x.role==='admin'?'bg-amber-100 text-amber-900':x.role==='scheduler'?'bg-blue-100 text-blue-800':'bg-slate-100 text-slate-700'}">${x.role}</span></td>
+     <td class="td">${userTeams(x.id).map(y => `<div>${esc(y.teams.name)}${y.teams.division ? ` <span class="text-xs text-slate-500">(${esc(y.teams.division)})</span>` : ''}</div>`).join('') || '-'}</td>
+     <td class="td text-right"><button class="btn2 !py-1" onclick="editUser('${x.id}')">Edit</button></td>`)), 'No users match.');
+}
+function addUserModal() {
+  modal(`<h3 class="font-bold text-lg mb-1">Add a person</h3><p class="text-xs text-slate-500 mb-3">If they already have a login they are added right away. Otherwise they are added automatically when they create an account with this email.</p><div class="space-y-3">
+    ${fld('Email', '<input id="n-email" type="email" class="inp">')}${fld('Name', '<input id="n-name" class="inp">')}
+    ${fld('Role', `<select id="n-role" class="inp" ${isAdmin() ? '' : 'disabled'}><option>user</option><option>scheduler</option><option>admin</option></select>`)}
+    <div><div class="lbl">Teams (approved immediately)</div><div class="max-h-40 overflow-y-auto border border-slate-200 rounded-lg p-2 text-sm">${S.teams.filter(t => t.active).map(t => `<label class="block"><input type="checkbox" class="n-team" value="${t.id}"> ${esc(t.name)} ${t.division ? `<span class="text-xs text-slate-500">(${esc(t.division)})</span>` : ''}</label>`).join('') || 'No teams yet.'}</div></div></div>
+    <div class="flex gap-2 mt-4"><button class="btn2 w-1/2" onclick="closeModal()">Cancel</button><button class="btn w-1/2" onclick="doAddUser()">Add person</button></div>`);
+}
+async function doAddUser() {
+  if (await rpc('add_user', { p_email: $('n-email').value, p_name: $('n-name').value, p_role: $('n-role').value, p_team_ids: [...document.querySelectorAll('.n-team:checked')].map(x => x.value) })) { closeModal(); V.users(); }
+}
+async function rmInvite(id) { if (await rpc('remove_invite', { p_id: id })) V.users(); }
 function editUser(id) {
   const u = S.users.find(x => x.id === id), ms = S.um.filter(y => y.user_id === id), lock = !isAdmin() || id === S.user.id;
   modal(`<h3 class="font-bold text-lg mb-1">Edit user</h3><p class="text-xs text-slate-500 mb-3">${esc(u.email)}</p><div class="space-y-3">
-    ${fld('Name', `<input id="u-name" class="inp" value="${esc(u.full_name || '')}">`)}
+    ${fld('Name', `<input id="u-name" class="inp" value="${esc(u.full_name)}">`)}
     ${fld('Role', `<select id="u-role" class="inp" ${lock ? 'disabled' : ''}>${['user','scheduler','admin'].map(r => `<option ${r===u.role?'selected':''}>${r}</option>`).join('')}</select>${lock ? '<p class="text-xs text-slate-500 mt-1">Only an admin can change roles, and not their own.</p>' : ''}`)}
     <div><div class="lbl">Teams</div>${ms.map(y => `<div class="flex justify-between items-center text-sm py-1 border-b border-slate-100"><span>${esc(y.teams?.name)} <span class="text-xs text-slate-500">(${y.status})</span></span><button class="btnr" onclick="rmMember('${y.id}','${id}')">Remove</button></div>`).join('') || '<p class="text-sm text-slate-500">Not on any team.</p>'}</div></div>
     <div class="flex gap-2 mt-4"><button class="btn2 w-1/2" onclick="closeModal()">Cancel</button><button class="btn w-1/2" onclick="saveUser('${id}')">Save user</button></div>`);
@@ -558,32 +648,36 @@ async function rmMember(mid, uid) { if (confirm('Remove this person from the tea
 
 /* ---------- DIAMONDS: LEVELS, AGE-GROUP RULES, EXCEPTIONS ---------- */
 V.dia = async () => {
-  await Promise.all([loadTeams(), loadRules()]);
-  const { data } = await db.from('diamonds').select('park_name,diamond_number,tier').gte('date', today());
-  const g = {}; (data || []).forEach(s => { const k = s.park_name + '|' + s.diamond_number; (g[k] = g[k] || { park: s.park_name, num: s.diamond_number, tiers: new Set() }).tiers.add(s.tier); });
-  S.dl = Object.values(g).sort((a, b) => (a.park + a.num).localeCompare(b.park + b.num, undefined, { numeric: true }));
-  const divs = [...new Set(S.teams.map(t => t.division).filter(Boolean))].sort();
-  const allowed = (d, t) => { const r = S.rules.find(x => x.division === d && x.tier === t); return r ? r.allowed : true; };
-  $('view').innerHTML = `<div class="card mb-5"><h2 class="font-bold text-lg mb-1">Diamond levels</h2><p class="text-xs text-slate-500 mb-3">Changing a level updates the open slots on that diamond. Already-booked slots keep the level they were booked at.</p>
-    ${tbl(['Diamond','Level'], S.dl.map((x, i) => row(`<td class="td font-medium">${esc(x.park)} #${esc(x.num)}</td><td class="td"><select class="inp !w-auto" onchange="setTier(${i},this.value)">${TIERS.map(t => `<option ${x.tiers.has(t) && x.tiers.size === 1 && t === [...x.tiers][0] ? 'selected' : ''}>${t}</option>`).join('')}</select>${x.tiers.size > 1 ? ' <span class="text-xs text-amber-700">mixed levels</span>' : ''}</td>`)), 'No upcoming slots yet.')}</div>
-  <div class="card mb-5"><h2 class="font-bold text-lg mb-1">Levels each age group can book</h2><p class="text-xs text-slate-500 mb-3">Untick a level to stop that age group from booking it. Age groups come from your teams. Staff can still assign slots manually.</p>
-    ${tbl(['Age group', ...TIERS], divs.map(d => row(`<td class="td font-semibold">${esc(d)}</td>${TIERS.map(t => `<td class="td"><input type="checkbox" ${allowed(d, t) ? 'checked' : ''} onchange="setRule('${esc(d).replace(/'/g,"\\'")}','${t}',this.checked)"></td>`).join('')}`)), 'No age groups yet. Add teams with an age group first.')}</div>
-  <div class="card"><h2 class="font-bold text-lg mb-1">Exceptions for a specific diamond</h2><p class="text-xs text-slate-500 mb-3">An exception overrides the table above for one age group on one diamond (for example, let U12 use one particular Premium diamond).</p>
-    ${tbl(['Diamond','Age group','Rule',''], S.exc.map(x => row(`<td class="td">${esc(x.park_name)} #${esc(x.diamond_number)}</td><td class="td">${esc(x.division)}</td><td class="td">${x.allow ? '<span class="tag bg-emerald-100 text-emerald-800">Allow</span>' : '<span class="tag bg-red-100 text-red-800">Block</span>'}</td><td class="td text-right"><button class="btnr" onclick="delExc('${x.id}')">Remove</button></td>`)), 'No exceptions.')}
+  await Promise.all([loadTeams(), loadRules(), loadMaster(), loadSet()]);
+  S.divs = [...new Set(S.teams.map(t => t.division).filter(Boolean))].sort();
+  const r = (d, t) => S.rules.find(x => x.division === d && x.tier === t) || { allowed: true, allowed_late: true }, late = (S.set.late_start || '20:30').slice(0, 5);
+  const who = x => x.team_id ? `Team: ${esc(S.teams.find(t => t.id === x.team_id)?.name || '?')}` : `Age group: ${esc(x.division)}`;
+  $('view').innerHTML = `<div class="card mb-5"><h2 class="font-bold text-lg mb-1">Late-start time</h2><p class="text-xs text-slate-500 mb-3">Slots that start at or after this time use the "Late" tick boxes below. Everything earlier uses "Regular".</p>
+    <div class="flex items-end gap-3"><div class="w-40">${fld('Late slots start at', `<input id="late" type="time" class="inp" value="${late}">`)}</div><button class="btn" onclick="saveLate()">Save</button></div></div>
+  <div class="card mb-5 !p-0 overflow-x-auto"><div class="p-4"><h2 class="font-bold text-lg mb-1">Which age groups can book which levels</h2><p class="text-xs text-slate-500">Untick to stop an age group booking that level. Staff can still assign slots manually. Age groups come from your teams.</p></div>
+    <table class="w-full text-sm"><thead><tr><th class="th" rowspan="2">Age group</th>${TIERS.map(t => `<th class="th text-center" colspan="2">${t}</th>`).join('')}</tr>
+    <tr>${TIERS.map(() => '<th class="th text-center font-normal">Regular</th><th class="th text-center font-normal">Late</th>').join('')}</tr></thead><tbody>
+    ${S.divs.map((d, i) => row(`<td class="td font-semibold">${esc(d)}</td>${TIERS.map(t => `<td class="td text-center"><input type="checkbox" ${r(d,t).allowed?'checked':''} onchange="setRule(${i},'${t}','allowed',this.checked)"></td><td class="td text-center"><input type="checkbox" ${r(d,t).allowed_late?'checked':''} onchange="setRule(${i},'${t}','allowed_late',this.checked)"></td>`).join('')}`)).join('') || '<tr><td colspan="9" class="td text-center text-slate-500 py-6">No age groups yet. Add teams with an age group first.</td></tr>'}</tbody></table></div>
+  <div class="card"><h2 class="font-bold text-lg mb-1">Exceptions for a specific diamond</h2><p class="text-xs text-slate-500 mb-3">An exception overrides the grid above, at any time of day, for one age group or one team on one diamond. A team exception beats an age-group exception.</p>
+    ${tbl(['Diamond','Applies to','Rule',''], S.exc.map(x => row(`<td class="td">${esc(x.park_name)} #${esc(x.diamond_number)}</td><td class="td">${who(x)}</td><td class="td">${x.allow ? '<span class="tag bg-emerald-100 text-emerald-800">Allow</span>' : '<span class="tag bg-red-100 text-red-800">Block</span>'}</td><td class="td text-right"><button class="btnr" onclick="delExc('${x.id}')">Remove</button></td>`)), 'No exceptions.')}
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 items-end mt-3">
-    ${fld('Diamond', `<select id="x-d" class="inp">${S.dl.map((x, i) => `<option value="${i}">${esc(x.park)} #${esc(x.num)}</option>`).join('')}</select>`)}
-    ${fld('Age group', `<select id="x-g" class="inp">${divs.map(d => `<option>${esc(d)}</option>`).join('')}</select>`)}
+    ${fld('Diamond', `<select id="x-d" class="inp">${S.dm.map((x, i) => `<option value="${i}">${esc(x.park_name)} #${esc(x.diamond_number)}</option>`).join('')}</select>`)}
+    ${fld('Age group or team', `<select id="x-w" class="inp"><optgroup label="Age groups">${S.divs.map(d => `<option value="d:${esc(d)}">${esc(d)}</option>`).join('')}</optgroup><optgroup label="Teams">${S.teams.map(t => `<option value="t:${t.id}">${esc(t.name)}</option>`).join('')}</optgroup></select>`)}
     ${fld('Rule', '<select id="x-a" class="inp"><option value="true">Allow</option><option value="false">Block</option></select>')}<button class="btn" onclick="addExc()">Add exception</button></div></div>`;
 };
-async function setTier(i, t) { const x = S.dl[i]; if (await rpc('set_diamond_tier', { p_park: x.park, p_diamond: x.num, p_tier: t })) V.dia(); }
-async function setRule(d, t, ok) {
-  const { error } = await db.from('tier_rules').upsert({ division: d, tier: t, allowed: ok }); if (error) return toast(error.message, 1);
-  audit('Age-group rule', `${d} / ${t} = ${ok ? 'allow' : 'block'}`); await loadRules(); toast('Saved.');
+async function saveLate() {
+  const { error } = await db.from('settings').upsert({ association_id: S.aid, key: 'late_start', value: $('late').value });
+  if (error) return toast(error.message, 1); audit('Late-start time', $('late').value); await loadSet(); toast('Saved.');
+}
+async function setRule(i, t, col, ok) {
+  const d = S.divs[i], cur = S.rules.find(x => x.division === d && x.tier === t) || { allowed: true, allowed_late: true };
+  const { error } = await db.from('tier_rules').upsert({ association_id: S.aid, division: d, tier: t, allowed: cur.allowed, allowed_late: cur.allowed_late, [col]: ok }, { onConflict: 'association_id,division,tier' });
+  if (error) return toast(error.message, 1);
+  audit('Age-group rule', `${d} / ${t} / ${col} = ${ok}`); await loadRules(); toast('Saved.');
 }
 async function addExc() {
-  const x = S.dl[$('x-d').value], g = $('x-g').value; if (!x || !g) return toast('Pick a diamond and an age group.', 1);
-  const { error } = await db.from('diamond_exceptions').upsert({ park_name: x.park, diamond_number: x.num, division: g, allow: $('x-a').value === 'true' }, { onConflict: 'park_name,diamond_number,division' });
-  if (error) return toast(error.message, 1); audit('Diamond exception', `${x.park} #${x.num} / ${g}`); V.dia();
+  const x = S.dm[$('x-d').value], w = $('x-w').value; if (!x || !w) return toast('Pick a diamond and who it applies to.', 1);
+  if (await rpc('set_exception', { p_park: x.park_name, p_diamond: x.diamond_number, p_division: w[0] === 'd' ? w.slice(2) : null, p_team: w[0] === 't' ? w.slice(2) : null, p_allow: $('x-a').value === 'true' })) V.dia();
 }
 async function delExc(id) { const { error } = await db.from('diamond_exceptions').delete().eq('id', id); if (error) return toast(error.message, 1); V.dia(); }
 
@@ -599,13 +693,13 @@ V.set = async () => {
 };
 async function saveSet() {
   const keys = [...SK.map(x => x[0]), 'rainout_free', 'announcement'];
-  const { error } = await db.from('settings').upsert(keys.map(k => ({ key: k, value: $('s-' + k).value })));
+  const { error } = await db.from('settings').upsert(keys.map(k => ({ association_id: S.aid, key: k, value: $('s-' + k).value })));
   if (error) return toast(error.message, 1);
   audit('Settings changed', ''); await loadSet(); banner(); toast('Settings saved.');
 }
 
 /* ---------- ACCESS CONTROL (admin only) ---------- */
-const PERMS = [['book','Book diamonds for their team'],['view_dashboard','View dashboard'],['view_schedule','View schedule'],['add_slots','Add slots (manual and CSV)'],['assign_slots','Manually assign slots to teams'],['release_slots','Rainout, cancel + reopen, and delete slots'],['add_credits','Add or remove team credits'],['approve_members','Approve team requests'],['manage_teams','Add, rename and edit teams'],['manage_users','Edit users and team memberships'],['manage_rules','Diamond levels, age-group rules, settings'],['new_season','Start a new season (reset credits)'],['view_audit','View audit log']];
+const PERMS = [['book','Book diamonds for their team'],['view_dashboard','View dashboard'],['view_schedule','View schedule'],['add_slots','Add slots (manual and CSV)'],['assign_slots','Manually assign slots to teams'],['release_slots','Rainout, cancel + reopen, and delete slots'],['add_credits','Add or remove team credits'],['approve_members','Approve team requests'],['manage_teams','Add, rename and edit teams'],['manage_users','Edit users and team memberships'],['manage_diamonds','Add and edit diamonds (Diamond Master)'],['manage_rules','Age and time restrictions, booking settings'],['new_season','Start a new season (reset credits)'],['view_audit','View audit log']];
 V.acc = async () => {
   const { data } = await db.from('permissions').select('*');
   const ok = (p, r) => r === 'admin' || !!(data || []).find(x => x.perm === p && x.role === r)?.allowed;
@@ -613,7 +707,7 @@ V.acc = async () => {
   ${tbl(['Function','User','Scheduler','Admin'], PERMS.map(([p, l]) => row(`<td class="td">${l}</td>${['user','scheduler','admin'].map(r => `<td class="td"><input type="checkbox" ${ok(p, r) ? 'checked' : ''} ${r === 'admin' ? 'disabled' : ''} onchange="setPerm('${p}','${r}',this.checked)"></td>`).join('')}`)), '')}`;
 };
 async function setPerm(p, r, ok) {
-  const { error } = await db.from('permissions').upsert({ perm: p, role: r, allowed: ok }); if (error) return toast(error.message, 1);
+  const { error } = await db.from('permissions').upsert({ association_id: S.aid, perm: p, role: r, allowed: ok }); if (error) return toast(error.message, 1);
   audit('Access changed', `${p} / ${r} = ${ok}`); toast('Saved.');
 }
 
@@ -622,6 +716,79 @@ V.aud = async () => {
   const { data } = await db.from('audit_log').select('*').order('created_at', { ascending: false }).limit(150);
   $('view').innerHTML = `<h2 class="font-bold text-lg mb-2">Audit log (latest 150)</h2>${tbl(['When','Who','Action','Details'], (data || []).map(r => row(`<td class="td whitespace-nowrap text-slate-500">${new Date(r.created_at).toLocaleString('en-CA',{dateStyle:'medium',timeStyle:'short'})}</td><td class="td">${esc(r.actor_email)}</td><td class="td font-semibold">${esc(r.action)}</td><td class="td text-slate-600">${esc(r.details)}</td>`)), 'Nothing logged yet.')}`;
 };
+
+/* ---------- DIAMOND MASTER ---------- */
+V.dm = async () => {
+  await loadMaster();
+  const parks = [...new Set(S.dm.map(x => x.park_name))];
+  $('view').innerHTML = `<div class="card mb-5"><h2 class="font-bold text-lg mb-3">Add a diamond</h2>
+    <datalist id="parks">${parks.map(p => `<option value="${esc(p)}">`).join('')}</datalist>
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-3 items-end">${fld('Park', '<input id="m-park" list="parks" class="inp">')}${fld('Diamond number or name', '<input id="m-num" class="inp">')}${fld('Level', tierSel('m-tier', 'Standard'))}${fld('Notes', '<input id="m-notes" class="inp">')}<button class="btn" onclick="addDiamond()">Add diamond</button></div>
+    <div class="flex flex-wrap items-center gap-3 mt-4 pt-4 border-t border-slate-200 text-sm"><b>CSV</b><button class="btn2" onclick="dmCSV()">Download diamonds</button>
+    <span class="text-slate-500">Upload columns: park_name, diamond_number, tier, active, notes.</span><input type="file" accept=".csv" onchange="upDiamonds(event)"></div></div>
+  <h2 class="font-bold text-lg mb-1">Diamonds and levels</h2><p class="text-xs text-slate-500 mb-2">Changing a level updates this diamond's open slots. Booked slots keep the level they were booked at. Inactive diamonds cannot get new slots.</p>
+  ${tbl(['Diamond','Level','Active','Notes',''], S.dm.map(x => row(`<td class="td font-medium">${esc(x.park_name)} #${esc(x.diamond_number)}</td>
+    <td class="td"><select class="inp !w-auto" onchange="dmField('${x.id}','tier',this.value)">${TIERS.map(t => `<option ${t===x.tier?'selected':''}>${t}</option>`).join('')}</select></td>
+    <td class="td"><input type="checkbox" ${x.active?'checked':''} onchange="dmField('${x.id}','active',this.checked)"></td><td class="td text-slate-600">${esc(x.notes || '')}</td>
+    <td class="td text-right"><button class="btn2 !py-1" onclick="editDiamond('${x.id}')">Edit</button></td>`)), 'No diamonds yet. Add your first one above.')}`;
+};
+const saveDia = (x, o) => rpc('save_diamond', { p_id: x.id, p_park: o.park ?? x.park_name, p_num: o.num ?? x.diamond_number, p_tier: o.tier ?? x.tier, p_active: o.active ?? x.active, p_notes: o.notes ?? x.notes });
+async function dmField(id, k, v) { await saveDia(S.dm.find(x => x.id === id), { [k]: v }); V.dm(); }
+async function addDiamond() {
+  if (await rpc('save_diamond', { p_id: null, p_park: $('m-park').value, p_num: $('m-num').value, p_tier: $('m-tier').value, p_active: true, p_notes: $('m-notes').value })) V.dm();
+}
+function editDiamond(id) {
+  const x = S.dm.find(m => m.id === id);
+  modal(`<h3 class="font-bold text-lg mb-1">Edit diamond</h3><p class="text-xs text-slate-500 mb-3">Renaming also renames this diamond's existing slots.</p><div class="space-y-3">
+    ${fld('Park', `<input id="e-park" class="inp" value="${esc(x.park_name)}">`)}${fld('Diamond number or name', `<input id="e-num" class="inp" value="${esc(x.diamond_number)}">`)}${fld('Notes', `<input id="e-notes" class="inp" value="${esc(x.notes || '')}">`)}</div>
+    <div class="flex gap-2 mt-4"><button class="btn2 w-1/2" onclick="closeModal()">Cancel</button><button class="btn w-1/2" onclick="saveDiaModal('${id}')">Save</button></div>`);
+}
+async function saveDiaModal(id) {
+  if (await saveDia(S.dm.find(x => x.id === id), { park: $('e-park').value, num: $('e-num').value, notes: $('e-notes').value })) { closeModal(); V.dm(); }
+}
+function dmCSV() { dl(['park_name,diamond_number,tier,active,notes', ...S.dm.map(x => [x.park_name, x.diamond_number, x.tier, x.active, x.notes].map(csvQ).join(','))].join('\n'), 'diamond_master.csv', 'text/csv'); }
+function upDiamonds(e) {
+  const f = e.target.files[0]; if (!f) return;
+  readObjs(f, async objs => {
+    const rows = [], bad = [];
+    objs.forEach((o, i) => { const t = TIERS.find(x => x.toLowerCase() === (o.tier || 'standard').toLowerCase());
+      if (!o.park_name || !o.diamond_number || !t) return bad.push(i + 2);
+      rows.push({ association_id: S.aid, park_name: o.park_name, diamond_number: o.diamond_number, tier: t, active: !['false','0','no'].includes((o.active || 'true').toLowerCase()), notes: o.notes || null }); });
+    if (!rows.length) return toast('No valid rows. Each needs park_name, diamond_number and a valid tier.', 1);
+    if (!confirm(`Import ${rows.length} diamond(s)? Existing diamonds are updated.${bad.length ? ` Skipping bad rows: ${bad.join(', ')}.` : ''}`)) return;
+    const { error } = await db.from('diamond_master').upsert(rows, { onConflict: 'association_id,park_name,diamond_number' });
+    if (error) return toast(error.message, 1);
+    await rpc('sync_tiers', {}); audit('Diamond CSV import', rows.length + ' rows'); V.dm();
+  });
+}
+
+/* ---------- PLATFORM ---------- */
+V.plat = async () => {
+  const { data: st } = await db.rpc('platform_stats'), sm = Object.fromEntries((st || []).map(x => [x.id, x]));
+  const base = location.origin + location.pathname;
+  $('view').innerHTML = `<div class="card mb-5"><h2 class="font-bold text-lg mb-1">Create an association</h2><p class="text-xs text-slate-500 mb-3">Each association gets its own teams, diamonds, credits, rules and people. The first admin gets access when they sign up (or immediately if they already have a login).</p>
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-3 items-end">${fld('Association name', '<input id="p-name" class="inp">')}${fld('Join code', '<input id="p-code" class="inp uppercase" placeholder="OSA2027">')}${fld('First admin email', '<input id="p-mail" type="email" class="inp">')}${fld('Time zone', '<input id="p-tz" class="inp" value="America/Toronto">')}<button class="btn" onclick="mkAssoc()">Create</button></div></div>
+  <h2 class="font-bold text-lg mb-2">Associations</h2>${tbl(['Association','Join link','Teams','People','Open','Booked','Status',''], S.assocs.map(a => { const s = sm[a.id] || {}; return row(
+    `<td class="td font-semibold">${esc(a.name)}<br><span class="text-xs text-slate-500">${esc(a.timezone)}</span></td><td class="td"><span class="tag bg-slate-100">${esc(a.join_code)}</span><br><span class="text-xs text-slate-500 break-all">${esc(base)}?a=${esc(a.join_code)}</span></td>
+     <td class="td">${s.teams ?? 0}</td><td class="td">${s.users ?? 0}</td><td class="td">${s.open ?? 0}</td><td class="td">${s.booked ?? 0}</td><td class="td">${a.active ? 'Active' : '<span class="text-red-700">Inactive</span>'}</td>
+     <td class="td text-right whitespace-nowrap"><button class="btn" onclick="switchAssoc('${a.id}')">Open</button> <button class="btn2 !py-1" onclick="editAssoc('${a.id}')">Edit</button></td>`); }), 'No associations yet. Create your first one above.')}`;
+};
+async function mkAssoc() {
+  const a = { p_name: $('p-name').value, p_code: $('p-code').value, p_admin_email: $('p-mail').value, p_tz: $('p-tz').value };
+  if (!a.p_name.trim() || !a.p_code.trim()) return toast('Enter a name and a join code.', 1);
+  if (await rpc('create_association', a)) { const { data } = await db.from('associations').select('*').order('name'); S.assocs = data || []; if (!S.aid && S.assocs.length) return switchAssoc(S.assocs[0].id); V.plat(); }
+}
+function editAssoc(id) {
+  const a = S.assocs.find(x => x.id === id);
+  modal(`<h3 class="font-bold text-lg mb-3">Edit association</h3><div class="space-y-3">${fld('Name', `<input id="ea-n" class="inp" value="${esc(a.name)}">`)}${fld('Join code', `<input id="ea-c" class="inp uppercase" value="${esc(a.join_code)}">`)}${fld('Time zone', `<input id="ea-t" class="inp" value="${esc(a.timezone)}">`)}
+    <label class="text-sm flex gap-2"><input type="checkbox" id="ea-a" ${a.active ? 'checked' : ''}> Active (inactive associations cannot be joined with the code)</label></div>
+    <div class="flex gap-2 mt-4"><button class="btn2 w-1/2" onclick="closeModal()">Cancel</button><button class="btn w-1/2" onclick="saveAssoc('${id}')">Save</button></div>`);
+}
+async function saveAssoc(id) {
+  if (await rpc('update_association', { p_id: id, p_name: $('ea-n').value, p_code: $('ea-c').value, p_tz: $('ea-t').value, p_active: $('ea-a').checked })) {
+    closeModal(); const { data } = await db.from('associations').select('*').order('name'); S.assocs = data || []; S.assoc = S.assocs.find(a => a.id === S.aid); header(); V.plat();
+  }
+}
 
 /* ---------- LIVE UPDATES ---------- */
 db.channel('diamonds-live').on('postgres_changes', { event: '*', schema: 'public', table: 'diamonds' }, () => {
