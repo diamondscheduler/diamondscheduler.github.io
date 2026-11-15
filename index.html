@@ -58,24 +58,39 @@
 
 <script>
 const db = window.supabase.createClient('https://srxptffjytjzyobafmkv.supabase.co','sb_publishable_6d3TQR4H_CwT9j1Wg9cMUA_kSkcKYxf');
-const S = {user:null,profile:null,mem:[],myTeams:[],team:null,teams:[],set:{},slots:[],mine:[],all:[],tab:'open',f:{date:'',park:'',tier:''},cal:false,cm:new Date(),pend:0,sf:{status:'',park:'',from:''}};
+const S = {user:null,profile:null,mem:[],myTeams:[],team:null,teams:[],set:{},perms:{},rules:[],exc:[],slots:[],mine:[],all:[],tab:'open',f:{date:'',park:'',tier:''},cal:false,cm:new Date(),pend:0,sf:{status:'',park:'',from:''}};
 const V = {};
 const $ = i => document.getElementById(i);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 const ymd = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 const today = () => ymd(new Date());
+const addDays = n => { const d = new Date(); d.setDate(d.getDate() + n); return d; };
 const D = s => { const [y,m,d] = s.split('-'); return new Date(y,m-1,d).toLocaleDateString('en-CA',{weekday:'short',month:'short',day:'numeric'}); };
 const T = s => { let [h,m] = s.split(':'); h = +h; return `${h%12||12}:${m} ${h>=12?'PM':'AM'}`; };
 const isAdmin = () => S.profile?.role === 'admin';
+const can = k => isAdmin() || !!S.perms[k];
 const dl = (txt,name,type) => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([txt],{type})); a.download = name; a.click(); };
 const modal = h => { $('mbody').innerHTML = h; $('modal').classList.remove('hidden'); };
 const closeModal = () => $('modal').classList.add('hidden');
-const cost = s => s.has_lights ? +S.set.prem_cost : +S.set.std_cost;
-const calc = (s,r) => r === 'Rainout' && S.set.rainout_free === 'true' ? 0 : cost(s);
-const tier = s => `<span class="tag ${s.has_lights?'bg-amber-100 text-amber-900':'bg-slate-100 text-slate-600'}">${s.has_lights?'PREM (lit)':'STD'}</span>`;
-const stTag = s => `<span class="tag ${s==='Booked'?'bg-blue-100 text-blue-800':s==='Rainout'?'bg-red-100 text-red-800':'bg-emerald-100 text-emerald-800'}">${s}</span>`;
 const audit = (a,d) => db.rpc('log_audit',{p_action:a,p_details:d||''});
-
+const TIERS = ['Practice','Standard','Premium','Lit'];
+const TC = {Practice:'bg-slate-100 text-slate-700',Standard:'bg-emerald-100 text-emerald-800',Premium:'bg-amber-100 text-amber-900',Lit:'bg-violet-100 text-violet-800'};
+const tier = s => `<span class="tag ${TC[s.tier]}">${s.tier}</span>`;
+const cost = s => +S.set['cost_' + s.tier.toLowerCase()];
+const calc = (s,r) => r === 'Rainout' && S.set.rainout_free === 'true' ? 0 : cost(s);
+const stTag = s => `<span class="tag ${s==='Booked'?'bg-blue-100 text-blue-800':s==='Rainout'?'bg-red-100 text-red-800':'bg-emerald-100 text-emerald-800'}">${s}</span>`;
+const row = c => `<tr class="border-t border-slate-100">${c}</tr>`;
+const tbl = (h, rows, empty) => `<div class="card !p-0 overflow-x-auto"><table class="w-full text-sm"><thead><tr>${h.map(x => `<th class="th">${x}</th>`).join('')}</tr></thead><tbody>${rows.length ? rows.join('') : `<tr><td colspan="${h.length}" class="td text-center text-slate-500 py-6">${empty}</td></tr>`}</tbody></table></div>`;
+const fld = (l, h) => `<div><label class="lbl">${l}</label>${h}</div>`;
+const tierSel = (id, v) => `<select id="${id}" class="inp">${TIERS.map(t => `<option ${t===v?'selected':''}>${t}</option>`).join('')}</select>`;
+const mapLink = p => `<a class="text-xs text-emerald-800 underline" target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(p)}">map</a>`;
+function canUse(t, s) {
+  if (!t || !t.division) return true;
+  const e = S.exc.find(x => x.park_name === s.park_name && x.diamond_number === s.diamond_number && x.division === t.division);
+  if (e) return e.allow;
+  const r = S.rules.find(x => x.division === t.division && x.tier === s.tier);
+  return r ? r.allowed : true;
+}
 function toast(m, err) {
   const t = $('toast');
   t.className = `fixed top-3 right-3 z-[60] max-w-sm p-3 rounded-lg border text-sm shadow ${err?'bg-red-50 border-red-300 text-red-800':'bg-emerald-50 border-emerald-300 text-emerald-900'}`;
@@ -88,6 +103,28 @@ async function rpc(fn, args) {
   if (data && data.message) toast(data.message);
   return data || {};
 }
+function parseCSV(t) {
+  const rows = []; let r = [], c = '', q = false;
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    if (q) { if (ch === '"') { if (t[i+1] === '"') { c += '"'; i++; } else q = false; } else c += ch; }
+    else if (ch === '"') q = true;
+    else if (ch === ',') { r.push(c); c = ''; }
+    else if (ch === '\n' || ch === '\r') { if (ch === '\r' && t[i+1] === '\n') i++; r.push(c); c = ''; if (r.some(x => x.trim())) rows.push(r); r = []; }
+    else c += ch;
+  }
+  r.push(c); if (r.some(x => x.trim())) rows.push(r); return rows;
+}
+function readObjs(file, cb) {
+  const rd = new FileReader();
+  rd.onload = () => {
+    const rows = parseCSV(rd.result.replace(/^\uFEFF/, '')); if (rows.length < 2) return toast('That CSV is empty.', 1);
+    const h = rows[0].map(x => x.trim().toLowerCase());
+    cb(rows.slice(1).map(c => Object.fromEntries(h.map((k, j) => [k, (c[j] || '').trim()]))));
+  };
+  rd.readAsText(file);
+}
+const csvQ = v => `"${String(v ?? '').replace(/"/g,'""')}"`;
 
 /* ---------- AUTH ---------- */
 let signup = false;
@@ -132,9 +169,10 @@ async function boot(session) {
   const { data: p } = await db.from('profiles').select('*').eq('id', S.user.id).maybeSingle();
   if (!p) { toast('Profile not found. Contact an administrator.', 1); return db.auth.signOut(); }
   S.profile = p;
-  await Promise.all([loadMem(), loadSet(), loadTeams()]);
-  if (isAdmin()) { await pending(); if (S.tab === 'open') S.tab = 'dash'; }
-  else if (!S.team) return showOnboard();
+  await Promise.all([loadMem(), loadSet(), loadTeams(), loadPerms(), loadRules()]);
+  if (can('approve_members')) await pending();
+  if (p.role === 'user' && !S.team) return showOnboard();
+  if (S.tab === 'open' && can('view_dashboard')) S.tab = 'dash';
   showApp();
 }
 async function loadMem() {
@@ -145,6 +183,14 @@ async function loadMem() {
 }
 async function loadSet() { const { data } = await db.from('settings').select('*'); S.set = Object.fromEntries((data || []).map(r => [r.key, r.value])); }
 async function loadTeams() { const { data } = await db.from('teams').select('*').order('name'); S.teams = data || []; }
+async function loadPerms() {
+  const { data } = await db.from('permissions').select('*').eq('role', S.profile.role);
+  S.perms = Object.fromEntries((data || []).filter(x => x.allowed).map(x => [x.perm, 1]));
+}
+async function loadRules() {
+  const [a, b] = await Promise.all([db.from('tier_rules').select('*'), db.from('diamond_exceptions').select('*')]);
+  S.rules = a.data || []; S.exc = b.data || [];
+}
 async function pending() {
   const { count } = await db.from('team_members').select('id', { count: 'exact', head: true }).eq('status', 'pending');
   S.pend = count || 0;
@@ -172,62 +218,58 @@ function showOnboard() {
 }
 async function reqTeam() {
   const id = $('j-team')?.value; if (!id) return;
-  if (await rpc('request_team', { p_team_id: id })) { await loadMem(); closeModal(); (!isAdmin() && !S.team) ? showOnboard() : (showApp(), joinModal()); }
+  if (await rpc('request_team', { p_team_id: id })) { await loadMem(); closeModal(); (S.profile.role === 'user' && !S.team) ? showOnboard() : (showApp(), joinModal()); }
 }
 function joinModal() { modal(`<div class="space-y-4"><div class="flex justify-between"><h3 class="font-bold text-lg">Join another team</h3><button class="btn2" onclick="closeModal()">Close</button></div>${joinForm()}${memList()}</div>`); }
 
 /* ---------- APP SHELL ---------- */
-const TABS = [['open','Open diamonds'],['mine','My bookings'],['dash','Dashboard',1],['appr','Approvals',1],['sched','Schedule',1],['teams','Teams & credits',1],['imp','CSV import',1],['set','Settings',1],['aud','Audit log',1]];
+const TABS = [['open','Open diamonds'],['mine','My bookings'],['dash','Dashboard','view_dashboard'],['appr','Approvals','approve_members'],['sched','Schedule','view_schedule'],['slots','Add slots','add_slots'],['teams','Teams','manage_teams'],['cred','Credits','add_credits'],['users','Users','manage_users'],['dia','Diamonds','manage_rules'],['set','Settings','manage_rules'],['acc','Access control','ADMIN'],['aud','Audit log','view_audit']];
+const showTab = t => !t[2] || (t[2] === 'ADMIN' ? isAdmin() : can(t[2]));
 function showApp() {
   ['auth','onboard'].forEach(x => $(x).classList.add('hidden')); $('app').classList.remove('hidden');
   header(); tabs(); banner(); go(S.tab);
 }
 function header() {
-  $('who').textContent = S.profile.email + (isAdmin() ? ' (administrator)' : '');
+  $('who').textContent = `${S.profile.email} (${S.profile.role})`;
   const sel = S.myTeams.length ? `<select class="rounded-lg px-2 py-1 text-sm text-slate-900" onchange="switchTeam(this.value)">${S.myTeams.map(t => `<option value="${t.id}" ${t.id===S.team?.id?'selected':''}>${esc(t.name)}</option>`).join('')}</select>
     <span class="tag bg-amber-300 text-slate-900">${S.team?.tokens_remaining ?? 0} credits</span>` : '';
   $('hdr').innerHTML = `${sel}<button class="btn2 !py-1" onclick="joinModal()">Join a team</button><button class="btn2 !py-1" onclick="db.auth.signOut()">Sign out</button>`;
 }
 function tabs() {
-  $('tabs').innerHTML = TABS.filter(t => !t[2] || isAdmin()).map(t =>
+  $('tabs').innerHTML = TABS.filter(showTab).map(t =>
     `<button onclick="go('${t[0]}')" class="px-3 py-3 text-sm font-semibold whitespace-nowrap border-b-2 ${S.tab===t[0]?'border-emerald-800 text-emerald-900':'border-transparent text-slate-600'}">${t[1]}${t[0]==='appr'&&S.pend?` <span class="tag bg-amber-400 text-slate-900">${S.pend}</span>`:''}</button>`).join('');
 }
-function banner() {
-  $('banner').innerHTML = S.set.announcement ? `<div class="bg-amber-100 text-amber-900 text-sm text-center py-2 px-4">${esc(S.set.announcement)}</div>` : '';
-}
+function banner() { $('banner').innerHTML = S.set.announcement ? `<div class="bg-amber-100 text-amber-900 text-sm text-center py-2 px-4">${esc(S.set.announcement)}</div>` : ''; }
 async function go(t) { S.tab = t; tabs(); $('view').innerHTML = '<p class="text-slate-500 p-6">Loading...</p>'; await V[t](); }
 async function switchTeam(id) {
   if (await rpc('set_active_team', { p_team_id: id })) { S.profile.active_team_id = id; await loadMem(); header(); go(S.tab); }
 }
 
-/* ---------- COACH: OPEN DIAMONDS ---------- */
+/* ---------- OPEN DIAMONDS (rows) ---------- */
 async function loadSlots() {
-  const { data, error } = await db.from('diamonds').select('*').eq('status','Available').gte('date', today()).order('date').order('start_time');
+  const { data, error } = await db.from('diamonds').select('*').eq('status','Available').gte('date', today())
+    .order('date').order('start_time').order('park_name').order('diamond_number');
   if (error) return toast(error.message, 1);
   S.slots = data || [];
 }
-V.open = async () => { await loadSlots(); drawOpen(); };
+V.open = async () => { await Promise.all([loadSlots(), loadRules()]); drawOpen(); };
 function drawOpen() {
   const f = S.f, parks = [...new Set(S.slots.map(s => s.park_name))].sort();
-  const base = S.slots.filter(s => (!f.park || s.park_name === f.park) && (!f.tier || s.tier_code === f.tier));
+  const base = S.slots.filter(s => (!f.park || s.park_name === f.park) && (!f.tier || s.tier === f.tier));
   const list = f.date ? base.filter(s => s.date === f.date) : base;
+  const act = s => !S.team ? '<span class="text-xs text-amber-700">Join a team</span>'
+    : !canUse(S.team, s) ? `<span class="text-xs text-slate-500">Not open to ${esc(S.team.division || 'your team')}</span>`
+    : `<button class="btn" onclick="bookModal('${s.id}')">Book</button>`;
   $('view').innerHTML = `<div class="card grid md:grid-cols-5 gap-3 items-end mb-4">
-    <div><label class="lbl">Date</label><input type="date" class="inp" value="${f.date}" min="${today()}" onchange="S.f.date=this.value;S.cal=false;drawOpen()"></div>
-    <div><label class="lbl">Park</label><select class="inp" onchange="S.f.park=this.value;drawOpen()"><option value="">All parks</option>${parks.map(p => `<option ${p===f.park?'selected':''}>${esc(p)}</option>`).join('')}</select></div>
-    <div><label class="lbl">Diamond type</label><select class="inp" onchange="S.f.tier=this.value;drawOpen()"><option value="">All</option><option value="PREM" ${f.tier==='PREM'?'selected':''}>Premium (lit)</option><option value="STD" ${f.tier==='STD'?'selected':''}>Standard (unlit)</option></select></div>
+    ${fld('Date', `<input type="date" class="inp" value="${f.date}" min="${today()}" onchange="S.f.date=this.value;S.cal=false;drawOpen()">`)}
+    ${fld('Park', `<select class="inp" onchange="S.f.park=this.value;drawOpen()"><option value="">All parks</option>${parks.map(p => `<option ${p===f.park?'selected':''}>${esc(p)}</option>`).join('')}</select>`)}
+    ${fld('Level', `<select class="inp" onchange="S.f.tier=this.value;drawOpen()"><option value="">All levels</option>${TIERS.map(t => `<option ${t===f.tier?'selected':''}>${t}</option>`).join('')}</select>`)}
     <button class="btn2" onclick="S.f={date:'',park:'',tier:''};drawOpen()">Clear filters</button>
     <div class="flex gap-1"><button class="${!S.cal?'btn':'btn2'} flex-1" onclick="S.cal=false;drawOpen()">List</button><button class="${S.cal?'btn':'btn2'} flex-1" onclick="S.cal=true;drawOpen()">Calendar</button></div></div>
-    ${S.cal ? calHTML(base) : (list.length ? `<div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">${list.map(card).join('')}</div>` : '<div class="card text-center text-slate-500 py-8">No open diamonds match these filters.</div>')}`;
-}
-function card(s) {
-  const c = cost(s);
-  return `<div class="card flex flex-col justify-between"><div>
-    <div class="flex justify-between items-start"><b class="text-emerald-900">${D(s.date)}</b>${tier(s)}</div>
-    <div class="font-bold text-lg mt-1">${esc(s.park_name)}</div>
-    <div class="text-sm text-slate-600">Diamond ${esc(s.diamond_number)} &middot; ${esc(s.field_size)} bases</div>
-    <div class="text-sm font-semibold mt-2">${T(s.start_time)} - ${T(s.end_time)}</div>
-    <a class="text-xs text-emerald-800 underline" target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(s.park_name)}">Map</a></div>
-    ${S.team ? `<button class="btn w-full mt-3" onclick="bookModal('${s.id}')">Book for ${c} credit${c===1?'':'s'}</button>` : '<p class="text-xs text-amber-700 mt-3">Join a team to book.</p>'}</div>`;
+    ${S.cal ? calHTML(base) : tbl(['Date','Time','Diamond','Level','Credits',''], list.slice(0,400).map(s => row(
+      `<td class="td whitespace-nowrap font-medium">${D(s.date)}</td><td class="td whitespace-nowrap">${T(s.start_time)} - ${T(s.end_time)}</td>
+       <td class="td">${esc(s.park_name)} #${esc(s.diamond_number)} ${mapLink(s.park_name)}</td><td class="td">${tier(s)}</td><td class="td">${cost(s)}</td><td class="td text-right">${act(s)}</td>`)),
+      'No open diamonds match these filters.')}`;
 }
 function calHTML(L) {
   const y = S.cm.getFullYear(), m = S.cm.getMonth(), first = new Date(y,m,1), n = new Date(y,m+1,0).getDate(), cnt = {};
@@ -245,7 +287,7 @@ function bookModal(id) {
   modal(`<h3 class="font-bold text-lg mb-2">Book this diamond</h3>
     <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm mb-3"><b>${esc(s.park_name)} #${esc(s.diamond_number)}</b> ${tier(s)}<br>${D(s.date)}, ${T(s.start_time)} - ${T(s.end_time)}</div>
     <p class="text-sm mb-2">Booking for <b>${esc(S.team.name)}</b> (${S.team.tokens_remaining} credits)</p>
-    <label class="lbl">Reason</label><select id="b-r" class="inp mb-3" onchange="$('b-c').textContent=calc(window._s,this.value)"><option>Practice</option><option>Exhibition Game</option><option value="Rainout">Rainout</option></select>
+    ${fld('Reason', `<select id="b-r" class="inp mb-3" onchange="$('b-c').textContent=calc(window._s,this.value)"><option>Practice</option><option>Exhibition Game</option><option value="Rainout">Rainout</option></select>`)}
     <p class="text-sm mb-4">Cost: <b id="b-c">${calc(s,'Practice')}</b> credit(s). Free cancellation until ${S.set.cancel_hours} hours before start.</p>
     <div class="flex gap-2"><button class="btn2 w-1/2" onclick="closeModal()">Cancel</button><button class="btn w-1/2" onclick="doBook('${id}')">Confirm booking</button></div>`);
 }
@@ -254,21 +296,19 @@ async function doBook(id) {
   closeModal(); await loadMem(); header(); await loadSlots(); if (S.tab === 'open') drawOpen();
 }
 
-/* ---------- COACH: MY BOOKINGS ---------- */
+/* ---------- MY BOOKINGS ---------- */
 V.mine = async () => {
   if (!S.team) return $('view').innerHTML = '<div class="card">Join a team to see its bookings.</div>';
   const [{ data: b }, { data: l }] = await Promise.all([
-    db.from('diamonds').select('*').eq('booked_by_team_id', S.team.id).order('date'),
+    db.from('diamonds').select('*').eq('booked_by_team_id', S.team.id).order('date').order('start_time'),
     db.from('token_ledger').select('*').eq('team_id', S.team.id).order('created_at', { ascending: false }).limit(40)]);
   S.mine = b || [];
   $('view').innerHTML = `<h2 class="font-bold text-lg mb-2">${esc(S.team.name)}: bookings</h2>
-  <div class="card !p-0 overflow-x-auto mb-6"><table class="w-full text-sm"><thead><tr><th class="th">Date</th><th class="th">Where</th><th class="th">Reason</th><th class="th">Cost</th><th class="th">Status</th><th class="th"></th></tr></thead><tbody>
-  ${S.mine.length ? S.mine.map(d => `<tr class="border-t border-slate-100"><td class="td">${D(d.date)}<br><span class="text-xs text-slate-500">${T(d.start_time)} - ${T(d.end_time)}</span></td>
+  ${tbl(['Date','Where','Reason','Cost','Status',''], S.mine.map(d => row(`<td class="td">${D(d.date)}<br><span class="text-xs text-slate-500">${T(d.start_time)} - ${T(d.end_time)}</span></td>
     <td class="td">${esc(d.park_name)} #${esc(d.diamond_number)} ${tier(d)}</td><td class="td">${esc(d.booking_reason)}</td><td class="td">${d.token_cost ?? 0}</td><td class="td">${stTag(d.status)}</td>
-    <td class="td text-right whitespace-nowrap"><button class="btng" onclick="ics('${d.id}')">Add to calendar</button>
-    ${d.status==='Booked'&&d.date>=today()?`<button class="btnr ml-1" onclick="cancelB('${d.id}')">Cancel</button>`:''}</td></tr>`).join('') : '<tr><td colspan="6" class="td text-center text-slate-500 py-6">No bookings yet. Find a slot under Open diamonds.</td></tr>'}</tbody></table></div>
-  <h2 class="font-bold text-lg mb-2">Credit history <span class="text-sm font-normal text-slate-500">(balance: ${S.team.tokens_remaining})</span></h2>
-  <div class="card !p-0 overflow-x-auto"><table class="w-full text-sm"><tbody>${(l || []).map(r => `<tr class="border-t border-slate-100"><td class="td text-slate-500 whitespace-nowrap">${new Date(r.created_at).toLocaleDateString('en-CA')}</td><td class="td">${esc(r.reason)}</td><td class="td text-right font-bold ${r.delta<0?'text-red-700':'text-emerald-700'}">${r.delta>0?'+':''}${r.delta}</td></tr>`).join('') || '<tr><td class="td text-slate-500">No activity yet.</td></tr>'}</tbody></table></div>`;
+    <td class="td text-right whitespace-nowrap"><button class="btng" onclick="ics('${d.id}')">Add to calendar</button>${d.status==='Booked'&&d.date>=today()?` <button class="btnr" onclick="cancelB('${d.id}')">Cancel</button>`:''}</td>`)), 'No bookings yet. Find a slot under Open diamonds.')}
+  <h2 class="font-bold text-lg mt-6 mb-2">Credit history <span class="text-sm font-normal text-slate-500">(balance: ${S.team.tokens_remaining})</span></h2>
+  ${tbl(['Date','Reason','Credits'], (l || []).map(r => row(`<td class="td text-slate-500 whitespace-nowrap">${new Date(r.created_at).toLocaleDateString('en-CA')}</td><td class="td">${esc(r.reason)}</td><td class="td font-bold ${r.delta<0?'text-red-700':'text-emerald-700'}">${r.delta>0?'+':''}${r.delta}</td>`)), 'No activity yet.')}`;
 };
 async function cancelB(id) {
   if (!confirm(`Cancel this booking? Credits are refunded only if you cancel at least ${S.set.cancel_hours} hours before the start time.`)) return;
@@ -281,88 +321,86 @@ function ics(id) {
     `SUMMARY:${d.booked_by_team} ${d.booking_reason}`,`LOCATION:${d.park_name} Diamond ${d.diamond_number}`,'END:VEVENT','END:VCALENDAR'].join('\r\n'), 'booking.ics', 'text/calendar');
 }
 
-/* ---------- ADMIN: DASHBOARD ---------- */
-const bar = (l, b, t) => `<div class="mb-2"><div class="flex justify-between text-sm"><span>${esc(l)}</span><span class="text-slate-500">${b}/${t} booked (${t?Math.round(100*b/t):0}%)</span></div><div class="h-2 bg-slate-200 rounded"><div class="h-2 bg-emerald-700 rounded" style="width:${t?100*b/t:0}%"></div></div></div>`;
+/* ---------- DASHBOARD (availability) ---------- */
 V.dash = async () => {
-  const [{ data: all }, { data: tm }] = await Promise.all([db.from('diamonds').select('*').gte('date', today()), db.from('teams').select('*').order('name')]);
-  await pending(); tabs();
-  const bk = all.filter(s => s.status === 'Booked'), op = all.filter(s => s.status === 'Available');
-  const g = (key) => { const o = {}; all.forEach(s => { const k = key(s), p = o[k] || (o[k] = { t: 0, b: 0 }); p.t++; if (s.status === 'Booked') p.b++; }); return o; };
-  const parks = g(s => s.park_name), tiers = g(s => s.has_lights ? 'Premium (lit) diamonds' : 'Standard (unlit) diamonds');
-  const wk = new Date(); wk.setDate(wk.getDate() + 7);
-  const soon = bk.filter(s => s.date <= ymd(wk)).sort((a,b) => (a.date+a.start_time).localeCompare(b.date+b.start_time));
-  const low = tm.filter(t => t.active && t.tokens_remaining <= 2);
+  const [{ data: all }, { data: tm }] = await Promise.all([db.from('diamonds').select('*').gte('date', today()).order('date').order('start_time'), db.from('teams').select('*')]);
+  if (can('approve_members')) await pending(); tabs();
+  S.dall = all || [];
+  const op = S.dall.filter(s => s.status === 'Available'), d7 = ymd(addDays(7)), d30 = ymd(addDays(30));
+  const byT = Object.fromEntries(TIERS.map(t => [t, op.filter(s => s.tier === t && s.date <= d30).length]));
+  const g = {};
+  S.dall.forEach(s => { const k = s.park_name + '|' + s.diamond_number, o = g[k] || (g[k] = { park: s.park_name, num: s.diamond_number, tier: s.tier, open: 0, tot: 0, next: null });
+    o.tot++; if (s.status === 'Available') { o.open++; if (!o.next) o.next = s; } });
+  S.dg = Object.values(g).sort((a,b) => (a.park + ' ' + a.num).localeCompare(b.park + ' ' + b.num, undefined, {numeric:true}));
+  const days = [...Array(14)].map((_, i) => { const k = ymd(addDays(i)); return [k, op.filter(s => s.date === k).length]; }), mx = Math.max(1, ...days.map(x => x[1]));
+  const low = (tm || []).filter(t => t.active && t.tokens_remaining <= 2).length;
   const stat = (n, l, c) => `<div class="card"><div class="text-3xl font-bold ${c||''}">${n}</div><div class="text-sm text-slate-600">${l}</div></div>`;
-  $('view').innerHTML = `<div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
-    ${stat(op.length,'open slots ahead')}${stat(bk.length,'booked slots ahead')}${stat(all.length?Math.round(100*bk.length/all.length)+'%':'0%','utilization')}${stat(S.pend,'approvals waiting',S.pend?'text-amber-600':'')}</div>
-    <div class="grid md:grid-cols-2 gap-4">
-    <div class="card"><h3 class="font-bold mb-3">Utilization by park</h3>${Object.entries(parks).map(([k,v]) => bar(k,v.b,v.t)).join('') || '<p class="text-sm text-slate-500">No slots yet.</p>'}<h3 class="font-bold mt-4 mb-3">By diamond type</h3>${Object.entries(tiers).map(([k,v]) => bar(k,v.b,v.t)).join('')}</div>
-    <div class="card"><h3 class="font-bold mb-2">Teams low on credits (2 or fewer)</h3>${low.map(t => `<div class="flex justify-between text-sm py-1 border-b border-slate-100"><span>${esc(t.name)}</span><span><b>${t.tokens_remaining}</b> <button class="btng ml-2" onclick="grant('${t.id}',5)">+5</button></span></div>`).join('') || '<p class="text-sm text-slate-500">All teams have credits.</p>'}
-    <h3 class="font-bold mt-4 mb-2">Bookings in the next 7 days</h3>${soon.map(s => `<div class="text-sm py-1 border-b border-slate-100">${D(s.date)} ${T(s.start_time)}: ${esc(s.park_name)} #${esc(s.diamond_number)} <span class="text-slate-500">${esc(s.booked_by_team)}</span></div>`).join('') || '<p class="text-sm text-slate-500">Nothing booked this week.</p>'}</div></div>`;
+  $('view').innerHTML = `<div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">${stat(op.filter(s => s.date <= d7).length,'open slots, next 7 days')}${stat(op.filter(s => s.date <= d30).length,'open slots, next 30 days')}
+    ${can('approve_members') ? stat(S.pend,'approvals waiting',S.pend?'text-amber-600':'') : ''}${can('add_credits') ? stat(low,'teams with 2 or fewer credits',low?'text-amber-600':'') : ''}</div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">${TIERS.map(t => `<div class="card !py-3"><span class="tag ${TC[t]}">${t}</span> <b class="text-xl ml-2">${byT[t]}</b><div class="text-xs text-slate-500">open, next 30 days</div></div>`).join('')}</div>
+    <div class="card mb-5"><h3 class="font-bold mb-3">Open slots per day, next 14 days</h3><div class="grid grid-cols-7 gap-2">${days.map(([k, n]) => `<div class="text-center text-xs"><div class="h-16 flex items-end justify-center"><div class="w-6 rounded-t bg-emerald-700" style="height:${Math.max(n?6:0, 100*n/mx)}%"></div></div><b>${n}</b><div class="text-slate-500">${D(k).replace(/,? \d{4}/,'')}</div></div>`).join('')}</div></div>
+    <h3 class="font-bold mb-2">Availability by diamond <span class="text-sm font-normal text-slate-500">(click a diamond for its future availability)</span></h3>
+    <div class="card !p-0 overflow-x-auto"><table class="w-full text-sm"><thead><tr><th class="th">Diamond</th><th class="th">Level</th><th class="th">Open slots ahead</th><th class="th">Next open</th></tr></thead><tbody>
+    ${S.dg.map((x, i) => `<tr class="border-t border-slate-100 cursor-pointer hover:bg-emerald-50" onclick="drill(${i})"><td class="td font-medium">${esc(x.park)} #${esc(x.num)}</td><td class="td">${tier(x)}</td><td class="td"><b>${x.open}</b> <span class="text-slate-500">of ${x.tot}</span></td><td class="td">${x.next ? D(x.next.date) + ' ' + T(x.next.start_time) : '<span class="text-red-700">None open</span>'}</td></tr>`).join('') || '<tr><td colspan="4" class="td text-center text-slate-500 py-6">No upcoming slots. Add some under Add slots.</td></tr>'}</tbody></table></div>`;
 };
+function drill(i) {
+  const g = S.dg[i], L = S.dall.filter(s => s.park_name === g.park && s.diamond_number === g.num);
+  modal(`<div class="flex justify-between mb-2"><h3 class="font-bold text-lg">${esc(g.park)} #${esc(g.num)} ${tier(g)}</h3><button class="btn2" onclick="closeModal()">Close</button></div>
+    <p class="text-sm text-slate-600 mb-2">${g.open} open of ${g.tot} upcoming slots</p>
+    <div class="max-h-96 overflow-y-auto"><table class="w-full text-sm">${L.map(s => row(`<td class="py-1 pr-2 whitespace-nowrap">${D(s.date)}</td><td class="py-1 pr-2 whitespace-nowrap">${T(s.start_time)} - ${T(s.end_time)}</td><td class="py-1">${s.status === 'Available' ? '<span class="text-emerald-700 font-semibold">Open</span>' : stTag(s.status) + ' ' + esc(s.booked_by_team || '')}</td>`)).join('')}</table></div>`);
+}
 
-/* ---------- ADMIN: APPROVALS & USERS ---------- */
+/* ---------- APPROVALS ---------- */
 V.appr = async () => {
-  const [{ data: p }, { data: u }, { data: m }] = await Promise.all([
-    db.from('team_members').select('*,profiles(email,full_name),teams(name)').eq('status','pending').order('requested_at'),
-    db.from('profiles').select('*').order('email'),
-    db.from('team_members').select('user_id,teams(name)').eq('status','approved')]);
+  const { data: p } = await db.from('team_members').select('*,profiles(email,full_name),teams(name)').eq('status','pending').order('requested_at');
   S.pend = p.length; tabs();
-  const tm = {}; (m || []).forEach(x => (tm[x.user_id] = tm[x.user_id] || []).push(x.teams?.name));
-  $('view').innerHTML = `<h2 class="font-bold text-lg mb-2">Pending team requests</h2><div class="card !p-0 overflow-x-auto mb-6"><table class="w-full text-sm"><tbody>
-  ${p.map(r => `<tr class="border-t border-slate-100"><td class="td">${esc(r.profiles?.full_name || '')}<br><span class="text-xs text-slate-500">${esc(r.profiles?.email)}</span></td><td class="td">wants to join <b>${esc(r.teams?.name)}</b></td><td class="td text-right whitespace-nowrap"><button class="btn" onclick="decide('${r.id}',true)">Approve</button> <button class="btnr" onclick="decide('${r.id}',false)">Reject</button></td></tr>`).join('') || '<tr><td class="td text-slate-500 text-center py-6">No requests waiting.</td></tr>'}</tbody></table></div>
-  <h2 class="font-bold text-lg mb-2">All users</h2><div class="card !p-0 overflow-x-auto"><table class="w-full text-sm"><thead><tr><th class="th">User</th><th class="th">Teams</th><th class="th">Role</th><th class="th"></th></tr></thead><tbody>
-  ${u.map(x => `<tr class="border-t border-slate-100"><td class="td">${esc(x.full_name || '')}<br><span class="text-xs text-slate-500">${esc(x.email)}</span></td><td class="td">${esc((tm[x.id] || []).join(', ')) || '-'}</td>
-  <td class="td">${x.role==='admin'?'<span class="tag bg-amber-100 text-amber-900">admin</span>':'coach'}</td>
-  <td class="td text-right">${x.id===S.user.id?'':`<button class="btn2" onclick="setRole('${x.id}','${x.role==='admin'?'coach':'admin'}')">${x.role==='admin'?'Make coach':'Make admin'}</button>`}</td></tr>`).join('')}</tbody></table></div>`;
+  $('view').innerHTML = `<h2 class="font-bold text-lg mb-2">Pending team requests</h2>${tbl(['Person','Request',''], p.map(r => row(
+    `<td class="td">${esc(r.profiles?.full_name || '')}<br><span class="text-xs text-slate-500">${esc(r.profiles?.email)}</span></td><td class="td">wants to join <b>${esc(r.teams?.name)}</b></td>
+     <td class="td text-right whitespace-nowrap"><button class="btn" onclick="decide('${r.id}',true)">Approve</button> <button class="btnr" onclick="decide('${r.id}',false)">Reject</button></td>`)), 'No requests waiting.')}`;
 };
 async function decide(id, ok) { if (await rpc('decide_membership', { p_member_id: id, p_approve: ok })) V.appr(); }
-async function setRole(id, role) { if (confirm(`Change this user to ${role}?`) && await rpc('set_role', { p_user: id, p_role: role })) V.appr(); }
 
-/* ---------- ADMIN: SCHEDULE ---------- */
+/* ---------- SCHEDULE (informational + actions) ---------- */
 V.sched = async () => {
-  const { data } = await db.from('diamonds').select('*').gte('date', ymd(new Date(Date.now() - 30*864e5))).order('date').order('start_time').order('park_name');
+  await loadTeams();
+  const { data } = await db.from('diamonds').select('*').gte('date', ymd(addDays(-30))).order('date').order('start_time').order('park_name').order('diamond_number');
   S.all = data || []; drawSched();
 };
-function schedList() {
-  const f = S.sf;
-  return S.all.filter(s => (!f.status || s.status === f.status) && (!f.park || s.park_name === f.park) && (!f.from || s.date >= f.from));
-}
+const schedList = () => S.all.filter(s => (!S.sf.status || s.status === S.sf.status) && (!S.sf.park || s.park_name === S.sf.park) && (!S.sf.from || s.date >= S.sf.from));
 function drawSched() {
   const f = S.sf, parks = [...new Set(S.all.map(s => s.park_name))].sort(), L = schedList();
-  const wd = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-  $('view').innerHTML = `<div class="card mb-5"><h3 class="font-bold mb-3">Add slots</h3>
-    <p class="text-xs text-slate-500 mb-3">Pick a date range and the weekdays this diamond is available. For one day, use the same start and end date.</p>
-    <datalist id="parks">${parks.map(p => `<option value="${esc(p)}">`).join('')}</datalist>
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-      <div><label class="lbl">Park</label><input id="g-park" list="parks" class="inp"></div>
-      <div><label class="lbl">Diamond number</label><input id="g-num" class="inp"></div>
-      <div><label class="lbl">Base length</label><select id="g-size" class="inp"><option>60ft</option><option>70ft</option><option>80ft</option><option>90ft</option></select></div>
-      <div><label class="lbl">Lights (premium)</label><select id="g-lit" class="inp"><option value="false">No</option><option value="true">Yes</option></select></div>
-      <div><label class="lbl">From date</label><input id="g-from" type="date" class="inp"></div>
-      <div><label class="lbl">To date</label><input id="g-to" type="date" class="inp"></div>
-      <div><label class="lbl">Start time</label><input id="g-s" type="time" value="18:30" class="inp"></div>
-      <div><label class="lbl">End time</label><input id="g-e" type="time" value="20:30" class="inp"></div></div>
-    <div class="flex flex-wrap gap-3 mt-3 text-sm">${wd.map((n,i) => `<label><input type="checkbox" class="g-wd" value="${i+1}" checked> ${n}</label>`).join('')}</div>
-    <button class="btn mt-3" onclick="genSlots()">Create slots</button></div>
-  <div class="card !p-0 overflow-x-auto"><div class="p-3 grid grid-cols-2 md:grid-cols-5 gap-3 items-end border-b border-slate-200">
-    <div><label class="lbl">Status</label><select class="inp" onchange="S.sf.status=this.value;drawSched()"><option value="">All</option>${['Available','Booked','Rainout'].map(x => `<option ${x===f.status?'selected':''}>${x}</option>`).join('')}</select></div>
-    <div><label class="lbl">Park</label><select class="inp" onchange="S.sf.park=this.value;drawSched()"><option value="">All</option>${parks.map(p => `<option ${p===f.park?'selected':''}>${esc(p)}</option>`).join('')}</select></div>
-    <div><label class="lbl">From date</label><input type="date" class="inp" value="${f.from}" onchange="S.sf.from=this.value;drawSched()"></div>
+  const acts = s => {
+    let a = '';
+    if (s.status === 'Available') { if (can('assign_slots')) a += `<button class="btn" onclick="assignModal('${s.id}')">Assign</button> `; if (can('release_slots')) a += `<button class="btnr" onclick="delSlot('${s.id}')">Delete</button>`; }
+    else if (s.status === 'Booked' && can('release_slots')) a += `<button class="btnr" onclick="rel('${s.id}','rainout')">Rainout + refund</button> <button class="btn2 !py-1 !text-xs" onclick="rel('${s.id}','cancel')">Cancel + reopen</button>`;
+    else if (s.status === 'Rainout' && can('release_slots')) a += `<button class="btnr" onclick="delSlot('${s.id}')">Delete</button>`;
+    return a;
+  };
+  $('view').innerHTML = `<div class="card mb-4 text-sm"><b>What the buttons do</b><ul class="mt-2 space-y-1 text-slate-700">
+    <li><b>Assign</b>: puts an open slot on a team of your choice. You can choose whether to charge the team credits. Age-group rules and booking limits are ignored.</li>
+    <li><b>Rainout + refund</b>: the booked game or practice was cancelled by weather. The team gets its credits back and the slot stays on the schedule marked Rainout (it is not reopened for booking).</li>
+    <li><b>Cancel + reopen</b>: removes the team's booking, refunds its credits and puts the slot back as Open so another team can book it.</li>
+    <li><b>Delete</b>: permanently removes a slot that nobody has booked (for example a permit you no longer hold).</li></ul></div>
+  <div class="card !p-3 grid grid-cols-2 md:grid-cols-5 gap-3 items-end mb-4">
+    ${fld('Status', `<select class="inp" onchange="S.sf.status=this.value;drawSched()"><option value="">All</option>${['Available','Booked','Rainout'].map(x => `<option ${x===f.status?'selected':''}>${x}</option>`).join('')}</select>`)}
+    ${fld('Park', `<select class="inp" onchange="S.sf.park=this.value;drawSched()"><option value="">All</option>${parks.map(p => `<option ${p===f.park?'selected':''}>${esc(p)}</option>`).join('')}</select>`)}
+    ${fld('From date', `<input type="date" class="inp" value="${f.from}" onchange="S.sf.from=this.value;drawSched()">`)}
     <button class="btn2" onclick="S.sf={status:'',park:'',from:''};drawSched()">Clear</button><button class="btn2" onclick="exportCSV()">Export CSV (${L.length})</button></div>
-  <table class="w-full text-sm"><thead><tr><th class="th">When</th><th class="th">Diamond</th><th class="th">Status</th><th class="th">Team</th><th class="th"></th></tr></thead><tbody>
-  ${L.slice(0,300).map(s => `<tr class="border-t border-slate-100"><td class="td whitespace-nowrap">${D(s.date)}<br><span class="text-xs text-slate-500">${T(s.start_time)} - ${T(s.end_time)}</span></td>
-   <td class="td">${esc(s.park_name)} #${esc(s.diamond_number)} ${tier(s)}</td><td class="td">${stTag(s.status)}</td>
-   <td class="td">${s.booked_by_team ? `<b>${esc(s.booked_by_team)}</b><br><span class="text-xs text-slate-500">${esc(s.booking_reason)} &middot; ${esc(s.coach_email)}</span>` : '-'}</td>
-   <td class="td text-right whitespace-nowrap">${s.status==='Booked' ? `<button class="btnr" onclick="rel('${s.id}','rainout')">Rainout + refund</button> <button class="btn2 !py-1 !text-xs" onclick="rel('${s.id}','cancel')">Cancel + reopen</button>` : `<button class="btnr" onclick="delSlot('${s.id}')">Delete</button>`}</td></tr>`).join('') || '<tr><td colspan="5" class="td text-center text-slate-500 py-6">No slots match. Add some above or import a CSV.</td></tr>'}</tbody></table>
-  ${L.length > 300 ? `<p class="p-3 text-xs text-slate-500">Showing the first 300 of ${L.length}. Use filters to narrow down.</p>` : ''}</div>`;
+  ${tbl(['When','Diamond','Level','Status','Team','Actions'], L.slice(0,300).map(s => row(`<td class="td whitespace-nowrap">${D(s.date)}<br><span class="text-xs text-slate-500">${T(s.start_time)} - ${T(s.end_time)}</span></td>
+    <td class="td">${esc(s.park_name)} #${esc(s.diamond_number)}</td><td class="td">${tier(s)}</td><td class="td">${stTag(s.status)}</td>
+    <td class="td">${s.booked_by_team ? `<b>${esc(s.booked_by_team)}</b><br><span class="text-xs text-slate-500">${esc(s.booking_reason)} &middot; ${esc(s.coach_email || '')}</span>` : '-'}</td><td class="td text-right whitespace-nowrap">${acts(s)}</td>`)), 'No slots match.')}
+  ${L.length > 300 ? `<p class="p-3 text-xs text-slate-500">Showing the first 300 of ${L.length}. Use filters to narrow down.</p>` : ''}`;
 }
-async function genSlots() {
-  const wds = [...document.querySelectorAll('.g-wd:checked')].map(x => +x.value);
-  const a = { p_park: $('g-park').value.trim(), p_diamond: $('g-num').value.trim(), p_size: $('g-size').value, p_lights: $('g-lit').value === 'true',
-    p_from: $('g-from').value, p_to: $('g-to').value, p_weekdays: wds, p_start: $('g-s').value, p_end: $('g-e').value };
-  if (!a.p_park || !a.p_diamond || !a.p_from || !a.p_to || !wds.length || a.p_end <= a.p_start) return toast('Fill in park, diamond, dates, weekdays and a valid time range.', 1);
-  if (await rpc('generate_slots', a)) V.sched();
+function assignModal(id) {
+  const s = S.all.find(x => x.id === id); window._s = s;
+  modal(`<h3 class="font-bold text-lg mb-2">Assign this slot to a team</h3><div class="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm mb-3"><b>${esc(s.park_name)} #${esc(s.diamond_number)}</b> ${tier(s)}<br>${D(s.date)}, ${T(s.start_time)} - ${T(s.end_time)}</div>
+    <div class="space-y-3">${fld('Team', `<select id="as-t" class="inp">${S.teams.filter(t => t.active).map(t => `<option value="${t.id}">${esc(t.name)} (${t.tokens_remaining} credits)</option>`).join('')}</select>`)}
+    ${fld('Reason', `<select id="as-r" class="inp" onchange="$('as-c').textContent=calc(window._s,this.value)"><option>Practice</option><option>Exhibition Game</option><option value="Rainout">Rainout</option></select>`)}
+    <label class="text-sm flex gap-2"><input type="checkbox" id="as-ch" checked> Charge <b id="as-c">${calc(s,'Practice')}</b> credit(s) to the team</label></div>
+    <div class="flex gap-2 mt-4"><button class="btn2 w-1/2" onclick="closeModal()">Cancel</button><button class="btn w-1/2" onclick="doAssign('${id}')">Assign</button></div>`);
+}
+async function doAssign(id) {
+  if (await rpc('assign_diamond', { p_diamond_id: id, p_team_id: $('as-t').value, p_reason: $('as-r').value, p_charge: $('as-ch').checked })) { closeModal(); V.sched(); }
 }
 async function rel(id, mode) {
   if (!confirm(mode === 'rainout' ? 'Mark as rainout and refund the team?' : 'Cancel this booking, refund the team and reopen the slot?')) return;
@@ -375,111 +413,188 @@ async function delSlot(id) {
   audit('Slot deleted', id); V.sched();
 }
 function exportCSV() {
-  const q = v => `"${String(v ?? '').replace(/"/g,'""')}"`, h = ['park_name','diamond_number','date','start_time','end_time','field_size','has_lights','status','booked_by_team','booking_reason','coach_email'];
-  dl([h.join(','), ...schedList().map(s => h.map(k => q(s[k])).join(','))].join('\n'), 'diamond_schedule.csv', 'text/csv');
+  const h = ['park_name','diamond_number','date','start_time','end_time','tier','status','booked_by_team','booking_reason','coach_email'];
+  dl([h.join(','), ...schedList().map(s => h.map(k => csvQ(s[k])).join(','))].join('\n'), 'diamond_schedule.csv', 'text/csv');
 }
 
-/* ---------- ADMIN: TEAMS & CREDITS ---------- */
-V.teams = async () => {
-  const [{ data: t }, { data: m }] = await Promise.all([db.from('teams').select('*').order('name'), db.from('team_members').select('team_id').eq('status','approved')]);
-  S.teams = t; const cnt = {}; (m || []).forEach(x => cnt[x.team_id] = (cnt[x.team_id] || 0) + 1);
-  $('view').innerHTML = `<div class="card mb-5"><h3 class="font-bold mb-3">Add a team</h3><div class="grid grid-cols-2 md:grid-cols-4 gap-3 items-end">
-    <div><label class="lbl">Team name</label><input id="t-name" class="inp"></div><div><label class="lbl">Division</label><input id="t-div" class="inp" placeholder="U14"></div>
-    <div><label class="lbl">Starting credits</label><input id="t-cr" type="number" min="0" value="10" class="inp"></div><button class="btn" onclick="addTeam()">Add team</button></div></div>
-  <div class="flex justify-between items-center mb-2"><h2 class="font-bold text-lg">Teams and credits</h2><button class="btn2" onclick="newSeason()">Start new season</button></div>
-  <div class="card !p-0 overflow-x-auto"><table class="w-full text-sm"><thead><tr><th class="th">Team</th><th class="th">Division</th><th class="th">Coaches</th><th class="th">Credits</th><th class="th"></th></tr></thead><tbody>
-  ${t.map(x => `<tr class="border-t border-slate-100"><td class="td font-semibold">${esc(x.name)}</td><td class="td">${esc(x.division || '')}</td><td class="td">${cnt[x.id] || 0}</td><td class="td font-bold text-emerald-800">${x.tokens_remaining}</td>
-  <td class="td text-right whitespace-nowrap"><button class="btng" onclick="grant('${x.id}',1)">+1</button> <button class="btng" onclick="grant('${x.id}',5)">+5</button> <button class="btn2 !py-1 !text-xs" onclick="grant('${x.id}')">Custom</button> <button class="btn2 !py-1 !text-xs" onclick="hist('${x.id}','${esc(x.name).replace(/'/g,'')}')">History</button></td></tr>`).join('') || '<tr><td colspan="5" class="td text-center text-slate-500 py-6">No teams yet. Add your first team above.</td></tr>'}</tbody></table></div>`;
-};
-async function addTeam() {
-  const name = $('t-name').value.trim(); if (!name) return toast('Enter a team name.', 1);
-  const { data, error } = await db.from('teams').insert({ name, division: $('t-div').value.trim() || null }).select().single();
-  if (error) return toast(error.message, 1);
-  const cr = +$('t-cr').value; if (cr > 0) await rpc('grant_tokens', { p_team_id: data.id, p_delta: cr, p_reason: 'Starting credits' });
-  audit('Team created', name); toast('Team added.'); V.teams();
-}
-async function grant(id, n) {
-  let reason = 'Admin top-up';
-  if (n == null) {
-    n = parseInt(prompt('Credits to add (use a negative number to remove):')); if (!n) return;
-    reason = prompt('Reason (shown in the team\'s history):', 'Admin adjustment') || 'Admin adjustment';
-  }
-  if (await rpc('grant_tokens', { p_team_id: id, p_delta: n, p_reason: reason })) go(S.tab);
-}
-async function hist(id, name) {
-  const { data } = await db.from('token_ledger').select('*').eq('team_id', id).order('created_at', { ascending: false }).limit(60);
-  modal(`<div class="flex justify-between mb-3"><h3 class="font-bold text-lg">${name}: credit history</h3><button class="btn2" onclick="closeModal()">Close</button></div>
-  <table class="w-full text-sm">${(data || []).map(r => `<tr class="border-t border-slate-100"><td class="py-1 pr-2 text-slate-500 whitespace-nowrap">${new Date(r.created_at).toLocaleDateString('en-CA')}</td><td class="py-1">${esc(r.reason)}</td><td class="py-1 text-right font-bold ${r.delta<0?'text-red-700':'text-emerald-700'}">${r.delta>0?'+':''}${r.delta}</td></tr>`).join('') || '<tr><td>No history.</td></tr>'}</table>`);
-}
-async function newSeason() {
-  const n = parseInt(prompt('Credits every active team should have for the new season:', '10'));
-  if (isNaN(n) || n < 0) return;
-  if (confirm(`Set EVERY active team to ${n} credits? Current balances are replaced (the change is recorded in each team's history).`) && await rpc('start_new_season', { p_allocation: n })) V.teams();
-}
-
-/* ---------- ADMIN: CSV IMPORT ---------- */
+/* ---------- ADD SLOTS (manual + CSV) ---------- */
 let csvRows = [];
-V.imp = async () => {
-  $('view').innerHTML = `<div class="card"><div class="flex flex-wrap justify-between gap-3 mb-3"><div><h2 class="font-bold text-lg">Import permits from CSV</h2>
-    <p class="text-sm text-slate-600">Columns: <code class="bg-slate-100 px-1 rounded">park_name, diamond_number, date, start_time, end_time, field_size, has_lights</code>. Dates as YYYY-MM-DD, times as HH:MM (24 hour). Duplicates are skipped.</p></div>
+V.slots = async () => {
+  const { data } = await db.from('diamonds').select('park_name').limit(2000);
+  const parks = [...new Set((data || []).map(x => x.park_name))].sort(), wd = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  $('view').innerHTML = `<div class="card mb-5"><h2 class="font-bold text-lg mb-1">Add slots manually</h2>
+    <p class="text-xs text-slate-500 mb-3">Choose a date range and the weekdays the diamond is available. For a single day, use the same From and To date.</p>
+    <datalist id="parks">${parks.map(p => `<option value="${esc(p)}">`).join('')}</datalist>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3">${fld('Park', '<input id="g-park" list="parks" class="inp">')}${fld('Diamond number', '<input id="g-num" class="inp">')}${fld('Level', tierSel('g-tier','Standard'))}<div></div>
+      ${fld('From date', '<input id="g-from" type="date" class="inp">')}${fld('To date', '<input id="g-to" type="date" class="inp">')}${fld('Start time', '<input id="g-s" type="time" value="18:30" class="inp">')}${fld('End time', '<input id="g-e" type="time" value="20:30" class="inp">')}</div>
+    <div class="flex flex-wrap gap-3 mt-3 text-sm">${wd.map((n, i) => `<label><input type="checkbox" class="g-wd" value="${i+1}" checked> ${n}</label>`).join('')}</div>
+    <button class="btn mt-3" onclick="genSlots()">Create slots</button></div>
+  <div class="card"><div class="flex flex-wrap justify-between gap-3 mb-3"><div><h2 class="font-bold text-lg">Add slots from a CSV</h2>
+    <p class="text-sm text-slate-600">Columns: <code class="bg-slate-100 px-1 rounded">park_name, diamond_number, date, start_time, end_time, tier</code>. Tier is Practice, Standard, Premium or Lit (blank means Standard). Dates as YYYY-MM-DD, times as HH:MM (24 hour). Duplicates are skipped.</p></div>
     <button class="btn2 self-start" onclick="sampleCSV()">Download sample</button></div>
-    <input type="file" accept=".csv" onchange="readCSV(event)" class="text-sm"><div id="csv-out" class="mt-4"></div></div>`;
+    <input type="file" accept=".csv" onchange="readSlotCSV(event)" class="text-sm"><div id="csv-out" class="mt-4"></div></div>`;
 };
+async function genSlots() {
+  const wds = [...document.querySelectorAll('.g-wd:checked')].map(x => +x.value);
+  const a = { p_park: $('g-park').value.trim(), p_diamond: $('g-num').value.trim(), p_tier: $('g-tier').value, p_from: $('g-from').value, p_to: $('g-to').value, p_weekdays: wds, p_start: $('g-s').value, p_end: $('g-e').value };
+  if (!a.p_park || !a.p_diamond || !a.p_from || !a.p_to || !wds.length || a.p_end <= a.p_start) return toast('Fill in park, diamond, dates, weekdays and a valid time range.', 1);
+  await rpc('generate_slots', a);
+}
 function sampleCSV() {
-  dl('park_name,diamond_number,date,start_time,end_time,field_size,has_lights\nMeadowvale Sports Park,1,' + today() + ',18:30,20:30,60ft,true\nLakefront Park,3,' + today() + ',19:00,21:00,70ft,false\n', 'sample_permits.csv', 'text/csv');
+  dl(`park_name,diamond_number,date,start_time,end_time,tier\nMeadowvale Sports Park,1,${today()},18:30,20:30,Lit\nLakefront Park,3,${today()},19:00,21:00,Premium\nRiverside Park,1,${today()},18:00,20:00,Practice\n`, 'sample_slots.csv', 'text/csv');
 }
-function parseCSV(t) {
-  const rows = []; let r = [], c = '', q = false;
-  for (let i = 0; i < t.length; i++) {
-    const ch = t[i];
-    if (q) { if (ch === '"') { if (t[i+1] === '"') { c += '"'; i++; } else q = false; } else c += ch; }
-    else if (ch === '"') q = true;
-    else if (ch === ',') { r.push(c); c = ''; }
-    else if (ch === '\n' || ch === '\r') { if (ch === '\r' && t[i+1] === '\n') i++; r.push(c); c = ''; if (r.some(x => x.trim())) rows.push(r); r = []; }
-    else c += ch;
-  }
-  r.push(c); if (r.some(x => x.trim())) rows.push(r); return rows;
-}
-function readCSV(e) {
+function readSlotCSV(e) {
   const f = e.target.files[0]; if (!f) return;
-  const rd = new FileReader();
-  rd.onload = () => {
-    const rows = parseCSV(rd.result.replace(/^\uFEFF/, '')); if (rows.length < 2) return toast('That CSV is empty.', 1);
-    const h = rows[0].map(x => x.trim().toLowerCase()); csvRows = [];
-    rows.slice(1).forEach((c, i) => {
-      const o = {}; h.forEach((k, j) => o[k] = (c[j] || '').trim());
+  readObjs(f, objs => {
+    csvRows = objs.map((o, i) => {
       const pad = t => /^\d{1,2}:\d{2}/.test(t) ? t.slice(0,5).padStart(5,'0') : '';
-      const r = { park_name: o.park_name, diamond_number: o.diamond_number, date: o.date, start_time: pad(o.start_time), end_time: pad(o.end_time),
-        field_size: o.field_size || '60ft', has_lights: ['true','1','yes','y'].includes((o.has_lights || '').toLowerCase()) };
-      const bad = [];
-      if (!r.park_name) bad.push('park missing'); if (!r.diamond_number) bad.push('diamond missing');
+      const tr = TIERS.find(t => t.toLowerCase() === (o.tier || 'standard').toLowerCase());
+      const r = { park_name: o.park_name, diamond_number: o.diamond_number, date: o.date, start_time: pad(o.start_time), end_time: pad(o.end_time), tier: tr }, bad = [];
+      if (!r.park_name) bad.push('park missing'); if (!r.diamond_number) bad.push('diamond missing'); if (!tr) bad.push('bad level');
       if (!/^\d{4}-\d{2}-\d{2}$/.test(r.date) || isNaN(new Date(r.date))) bad.push('bad date');
       if (!r.start_time || !r.end_time) bad.push('bad time'); else if (r.end_time <= r.start_time) bad.push('end before start');
-      csvRows.push({ n: i + 2, r, bad });
+      return { n: i + 2, r, bad };
     });
     const ok = csvRows.filter(x => !x.bad.length).length;
     $('csv-out').innerHTML = `<p class="text-sm mb-2"><b>${ok}</b> valid rows, <b class="${csvRows.length-ok?'text-red-700':''}">${csvRows.length-ok}</b> with problems.</p>
-      <div class="max-h-72 overflow-auto border border-slate-200 rounded-lg mb-3"><table class="w-full text-xs"><tbody>${csvRows.map(x => `<tr class="border-t border-slate-100 ${x.bad.length?'bg-red-50':''}"><td class="td">Row ${x.n}</td><td class="td">${esc(x.r.park_name)} #${esc(x.r.diamond_number)}</td><td class="td">${esc(x.r.date)} ${esc(x.r.start_time)}-${esc(x.r.end_time)}</td><td class="td">${x.r.has_lights?'lit':'unlit'}</td><td class="td text-red-700">${x.bad.join(', ')}</td></tr>`).join('')}</tbody></table></div>
+      <div class="max-h-72 overflow-auto border border-slate-200 rounded-lg mb-3"><table class="w-full text-xs"><tbody>${csvRows.map(x => row(`<td class="td">Row ${x.n}</td><td class="td">${esc(x.r.park_name)} #${esc(x.r.diamond_number)}</td><td class="td">${esc(x.r.date)} ${esc(x.r.start_time)}-${esc(x.r.end_time)}</td><td class="td">${esc(x.r.tier || '')}</td><td class="td text-red-700">${x.bad.join(', ')}</td>`)).join('')}</tbody></table></div>
       <button class="btn" ${ok?'':'disabled'} onclick="doImport()">Import ${ok} valid row(s)</button>`;
-  };
-  rd.readAsText(f);
+  });
 }
 async function doImport() {
   const rows = csvRows.filter(x => !x.bad.length).map(x => x.r);
   const { data, error } = await db.from('diamonds').upsert(rows, { onConflict: 'park_name,diamond_number,date,start_time', ignoreDuplicates: true }).select('id');
   if (error) return toast(error.message, 1);
   audit('CSV import', `${data.length} added, ${rows.length - data.length} duplicates skipped`);
-  toast(`${data.length} slots added. ${rows.length - data.length} duplicates skipped.`); csvRows = []; V.imp();
+  toast(`${data.length} slots added. ${rows.length - data.length} duplicates skipped.`); csvRows = []; V.slots();
 }
 
-/* ---------- ADMIN: SETTINGS & AUDIT ---------- */
-const SK = [['std_cost','Standard (unlit) diamond cost, in credits'],['prem_cost','Premium (lit) diamond cost, in credits'],['cancel_hours','Free cancellation until this many hours before start'],['window_days','Booking window: how many days ahead teams can book'],['max_active','Max active future bookings per team']];
+/* ---------- TEAMS ---------- */
+V.teams = async () => {
+  const [{ data: t }, { data: m }] = await Promise.all([db.from('teams').select('*').order('name'), db.from('team_members').select('team_id').eq('status','approved')]);
+  S.teams = t; const cnt = {}; (m || []).forEach(x => cnt[x.team_id] = (cnt[x.team_id] || 0) + 1);
+  $('view').innerHTML = `<div class="card mb-5"><h3 class="font-bold mb-3">Add a team</h3><div class="grid grid-cols-2 md:grid-cols-4 gap-3 items-end">
+    ${fld('Team name', '<input id="t-name" class="inp">')}${fld('Age group', '<input id="t-div" class="inp" placeholder="U14">')}${fld('Starting credits', '<input id="t-cr" type="number" min="0" value="10" class="inp">')}<button class="btn" onclick="addTeam()">Add team</button></div>
+    <div class="flex flex-wrap items-center gap-3 mt-4 pt-4 border-t border-slate-200 text-sm"><b>CSV</b><button class="btn2" onclick="teamsCSV()">Download teams</button>
+    <span class="text-slate-500">Upload columns: name, division, credits (credits apply to new teams only).</span><input type="file" accept=".csv" onchange="upTeams(event)"></div></div>
+  ${tbl(['Team','Age group','Coaches','Status',''], t.map(x => row(`<td class="td font-semibold">${esc(x.name)}</td><td class="td">${esc(x.division || '')}</td><td class="td">${cnt[x.id] || 0}</td><td class="td">${x.active ? 'Active' : '<span class="text-slate-400">Inactive</span>'}</td><td class="td text-right"><button class="btn2 !py-1" onclick="editTeam('${x.id}')">Edit</button></td>`)), 'No teams yet. Add your first team above.')}`;
+};
+async function addTeam() {
+  const name = $('t-name').value.trim(); if (!name) return toast('Enter a team name.', 1);
+  const { data, error } = await db.from('teams').insert({ name, division: $('t-div').value.trim() || null }).select().single();
+  if (error) return toast(error.message, 1);
+  const cr = +$('t-cr').value; if (cr > 0 && can('add_credits')) await rpc('grant_tokens', { p_team_id: data.id, p_delta: cr, p_reason: 'Starting credits' });
+  audit('Team created', name); toast('Team added.'); V.teams();
+}
+function editTeam(id) {
+  const t = S.teams.find(x => x.id === id);
+  modal(`<h3 class="font-bold text-lg mb-3">Edit team</h3><div class="space-y-3">${fld('Team name', `<input id="e-name" class="inp" value="${esc(t.name)}">`)}${fld('Age group', `<input id="e-div" class="inp" value="${esc(t.division || '')}">`)}
+    <label class="text-sm flex gap-2"><input type="checkbox" id="e-act" ${t.active ? 'checked' : ''}> Active (inactive teams cannot be joined)</label></div>
+    <div class="flex gap-2 mt-4"><button class="btn2 w-1/2" onclick="closeModal()">Cancel</button><button class="btn w-1/2" onclick="saveTeam('${id}')">Save team</button></div>`);
+}
+async function saveTeam(id) {
+  const name = $('e-name').value.trim(); if (!name) return toast('Team name is required.', 1);
+  if (await rpc('rename_team', { p_team_id: id, p_name: name, p_division: $('e-div').value, p_active: $('e-act').checked })) { closeModal(); V.teams(); }
+}
+function teamsCSV() { dl(['name,division,credits,active', ...S.teams.map(t => [t.name, t.division, t.tokens_remaining, t.active].map(csvQ).join(','))].join('\n'), 'teams.csv', 'text/csv'); }
+function upTeams(e) {
+  const f = e.target.files[0]; if (!f) return;
+  readObjs(f, async objs => {
+    const have = new Set(S.teams.map(t => t.name.toLowerCase()));
+    const rows = objs.filter(o => o.name).map(o => ({ name: o.name, division: o.division || null, cr: +o.credits || 0, isNew: !have.has(o.name.toLowerCase()) }));
+    if (!rows.length || !confirm(`Import ${rows.length} team(s)? Existing names are updated; new teams are created.`)) return;
+    const { data, error } = await db.from('teams').upsert(rows.map(r => ({ name: r.name, division: r.division })), { onConflict: 'name' }).select();
+    if (error) return toast(error.message, 1);
+    if (can('add_credits')) for (const r of rows.filter(x => x.isNew && x.cr > 0)) { const t = data.find(x => x.name === r.name); if (t) await rpc('grant_tokens', { p_team_id: t.id, p_delta: r.cr, p_reason: 'Starting credits (CSV)' }); }
+    audit('Teams CSV import', rows.length + ' rows'); toast(`${rows.length} team(s) processed.`); V.teams();
+  });
+}
+
+/* ---------- CREDITS ---------- */
+V.cred = async () => {
+  const { data: t } = await db.from('teams').select('*').order('name'); S.teams = t;
+  $('view').innerHTML = `<div class="flex justify-between items-center mb-2"><h2 class="font-bold text-lg">Credits</h2>${can('new_season') ? '<button class="btn2" onclick="newSeason()">Start new season</button>' : ''}</div>
+  ${tbl(['Team','Age group','Credits',''], t.map(x => row(`<td class="td font-semibold">${esc(x.name)}</td><td class="td">${esc(x.division || '')}</td><td class="td font-bold text-emerald-800">${x.tokens_remaining}</td>
+    <td class="td text-right whitespace-nowrap"><button class="btng" onclick="grant('${x.id}',1)">+1</button> <button class="btng" onclick="grant('${x.id}',5)">+5</button> <button class="btn2 !py-1 !text-xs" onclick="grant('${x.id}')">Add Credits</button> <button class="btn2 !py-1 !text-xs" onclick="hist('${x.id}')">History</button></td>`)), 'No teams yet.')}`;
+};
+async function grant(id, n) {
+  let reason = 'Top-up';
+  if (n == null) {
+    n = parseInt(prompt('Credits to add (use a negative number to remove):')); if (!n) return;
+    reason = prompt("Reason (shown in the team's history):", 'Adjustment') || 'Adjustment';
+  }
+  if (await rpc('grant_tokens', { p_team_id: id, p_delta: n, p_reason: reason })) go(S.tab);
+}
+async function hist(id) {
+  const t = S.teams.find(x => x.id === id);
+  const { data } = await db.from('token_ledger').select('*').eq('team_id', id).order('created_at', { ascending: false }).limit(60);
+  modal(`<div class="flex justify-between mb-3"><h3 class="font-bold text-lg">${esc(t.name)}: credit history</h3><button class="btn2" onclick="closeModal()">Close</button></div>
+  <table class="w-full text-sm">${(data || []).map(r => row(`<td class="py-1 pr-2 text-slate-500 whitespace-nowrap">${new Date(r.created_at).toLocaleDateString('en-CA')}</td><td class="py-1">${esc(r.reason)}</td><td class="py-1 text-right font-bold ${r.delta<0?'text-red-700':'text-emerald-700'}">${r.delta>0?'+':''}${r.delta}</td>`)).join('') || '<tr><td>No history.</td></tr>'}</table>`);
+}
+async function newSeason() {
+  const n = parseInt(prompt('Credits every active team should have for the new season:', '10'));
+  if (isNaN(n) || n < 0) return;
+  if (confirm(`Set EVERY active team to ${n} credits? Current balances are replaced (recorded in each team's history).`) && await rpc('start_new_season', { p_allocation: n })) V.cred();
+}
+
+/* ---------- USERS ---------- */
+V.users = async () => {
+  const [{ data: u }, { data: m }] = await Promise.all([db.from('profiles').select('*').order('email'), db.from('team_members').select('id,user_id,status,teams(name)')]);
+  S.users = u; S.um = m || [];
+  $('view').innerHTML = `<h2 class="font-bold text-lg mb-2">Users</h2>${tbl(['User','Role','Teams',''], u.map(x => row(
+    `<td class="td">${esc(x.full_name || '')}<br><span class="text-xs text-slate-500">${esc(x.email)}</span></td><td class="td"><span class="tag ${x.role==='admin'?'bg-amber-100 text-amber-900':x.role==='scheduler'?'bg-blue-100 text-blue-800':'bg-slate-100 text-slate-700'}">${x.role}</span></td>
+     <td class="td">${esc(S.um.filter(y => y.user_id === x.id && y.status === 'approved').map(y => y.teams?.name).join(', ')) || '-'}</td><td class="td text-right"><button class="btn2 !py-1" onclick="editUser('${x.id}')">Edit</button></td>`)), 'No users.')}`;
+};
+function editUser(id) {
+  const u = S.users.find(x => x.id === id), ms = S.um.filter(y => y.user_id === id), lock = !isAdmin() || id === S.user.id;
+  modal(`<h3 class="font-bold text-lg mb-1">Edit user</h3><p class="text-xs text-slate-500 mb-3">${esc(u.email)}</p><div class="space-y-3">
+    ${fld('Name', `<input id="u-name" class="inp" value="${esc(u.full_name || '')}">`)}
+    ${fld('Role', `<select id="u-role" class="inp" ${lock ? 'disabled' : ''}>${['user','scheduler','admin'].map(r => `<option ${r===u.role?'selected':''}>${r}</option>`).join('')}</select>${lock ? '<p class="text-xs text-slate-500 mt-1">Only an admin can change roles, and not their own.</p>' : ''}`)}
+    <div><div class="lbl">Teams</div>${ms.map(y => `<div class="flex justify-between items-center text-sm py-1 border-b border-slate-100"><span>${esc(y.teams?.name)} <span class="text-xs text-slate-500">(${y.status})</span></span><button class="btnr" onclick="rmMember('${y.id}','${id}')">Remove</button></div>`).join('') || '<p class="text-sm text-slate-500">Not on any team.</p>'}</div></div>
+    <div class="flex gap-2 mt-4"><button class="btn2 w-1/2" onclick="closeModal()">Cancel</button><button class="btn w-1/2" onclick="saveUser('${id}')">Save user</button></div>`);
+}
+async function saveUser(id) { if (await rpc('update_user', { p_user: id, p_name: $('u-name').value, p_role: $('u-role').value })) { closeModal(); V.users(); } }
+async function rmMember(mid, uid) { if (confirm('Remove this person from the team?') && await rpc('remove_member', { p_member_id: mid })) { await V.users(); editUser(uid); } }
+
+/* ---------- DIAMONDS: LEVELS, AGE-GROUP RULES, EXCEPTIONS ---------- */
+V.dia = async () => {
+  await Promise.all([loadTeams(), loadRules()]);
+  const { data } = await db.from('diamonds').select('park_name,diamond_number,tier').gte('date', today());
+  const g = {}; (data || []).forEach(s => { const k = s.park_name + '|' + s.diamond_number; (g[k] = g[k] || { park: s.park_name, num: s.diamond_number, tiers: new Set() }).tiers.add(s.tier); });
+  S.dl = Object.values(g).sort((a, b) => (a.park + a.num).localeCompare(b.park + b.num, undefined, { numeric: true }));
+  const divs = [...new Set(S.teams.map(t => t.division).filter(Boolean))].sort();
+  const allowed = (d, t) => { const r = S.rules.find(x => x.division === d && x.tier === t); return r ? r.allowed : true; };
+  $('view').innerHTML = `<div class="card mb-5"><h2 class="font-bold text-lg mb-1">Diamond levels</h2><p class="text-xs text-slate-500 mb-3">Changing a level updates the open slots on that diamond. Already-booked slots keep the level they were booked at.</p>
+    ${tbl(['Diamond','Level'], S.dl.map((x, i) => row(`<td class="td font-medium">${esc(x.park)} #${esc(x.num)}</td><td class="td"><select class="inp !w-auto" onchange="setTier(${i},this.value)">${TIERS.map(t => `<option ${x.tiers.has(t) && x.tiers.size === 1 && t === [...x.tiers][0] ? 'selected' : ''}>${t}</option>`).join('')}</select>${x.tiers.size > 1 ? ' <span class="text-xs text-amber-700">mixed levels</span>' : ''}</td>`)), 'No upcoming slots yet.')}</div>
+  <div class="card mb-5"><h2 class="font-bold text-lg mb-1">Levels each age group can book</h2><p class="text-xs text-slate-500 mb-3">Untick a level to stop that age group from booking it. Age groups come from your teams. Staff can still assign slots manually.</p>
+    ${tbl(['Age group', ...TIERS], divs.map(d => row(`<td class="td font-semibold">${esc(d)}</td>${TIERS.map(t => `<td class="td"><input type="checkbox" ${allowed(d, t) ? 'checked' : ''} onchange="setRule('${esc(d).replace(/'/g,"\\'")}','${t}',this.checked)"></td>`).join('')}`)), 'No age groups yet. Add teams with an age group first.')}</div>
+  <div class="card"><h2 class="font-bold text-lg mb-1">Exceptions for a specific diamond</h2><p class="text-xs text-slate-500 mb-3">An exception overrides the table above for one age group on one diamond (for example, let U12 use one particular Premium diamond).</p>
+    ${tbl(['Diamond','Age group','Rule',''], S.exc.map(x => row(`<td class="td">${esc(x.park_name)} #${esc(x.diamond_number)}</td><td class="td">${esc(x.division)}</td><td class="td">${x.allow ? '<span class="tag bg-emerald-100 text-emerald-800">Allow</span>' : '<span class="tag bg-red-100 text-red-800">Block</span>'}</td><td class="td text-right"><button class="btnr" onclick="delExc('${x.id}')">Remove</button></td>`)), 'No exceptions.')}
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 items-end mt-3">
+    ${fld('Diamond', `<select id="x-d" class="inp">${S.dl.map((x, i) => `<option value="${i}">${esc(x.park)} #${esc(x.num)}</option>`).join('')}</select>`)}
+    ${fld('Age group', `<select id="x-g" class="inp">${divs.map(d => `<option>${esc(d)}</option>`).join('')}</select>`)}
+    ${fld('Rule', '<select id="x-a" class="inp"><option value="true">Allow</option><option value="false">Block</option></select>')}<button class="btn" onclick="addExc()">Add exception</button></div></div>`;
+};
+async function setTier(i, t) { const x = S.dl[i]; if (await rpc('set_diamond_tier', { p_park: x.park, p_diamond: x.num, p_tier: t })) V.dia(); }
+async function setRule(d, t, ok) {
+  const { error } = await db.from('tier_rules').upsert({ division: d, tier: t, allowed: ok }); if (error) return toast(error.message, 1);
+  audit('Age-group rule', `${d} / ${t} = ${ok ? 'allow' : 'block'}`); await loadRules(); toast('Saved.');
+}
+async function addExc() {
+  const x = S.dl[$('x-d').value], g = $('x-g').value; if (!x || !g) return toast('Pick a diamond and an age group.', 1);
+  const { error } = await db.from('diamond_exceptions').upsert({ park_name: x.park, diamond_number: x.num, division: g, allow: $('x-a').value === 'true' }, { onConflict: 'park_name,diamond_number,division' });
+  if (error) return toast(error.message, 1); audit('Diamond exception', `${x.park} #${x.num} / ${g}`); V.dia();
+}
+async function delExc(id) { const { error } = await db.from('diamond_exceptions').delete().eq('id', id); if (error) return toast(error.message, 1); V.dia(); }
+
+/* ---------- SETTINGS ---------- */
+const SK = [...TIERS.map(t => ['cost_' + t.toLowerCase(), `${t} diamond cost, in credits`]), ['cancel_hours','Free cancellation until this many hours before start'],['window_days','Booking window: how many days ahead teams can book'],['max_active','Max active future bookings per team']];
 V.set = async () => {
   await loadSet();
   $('view').innerHTML = `<div class="card max-w-xl"><h2 class="font-bold text-lg mb-3">Booking rules</h2><div class="space-y-3">
-  ${SK.map(([k,l]) => `<div><label class="lbl">${l}</label><input id="s-${k}" type="number" min="0" class="inp" value="${esc(S.set[k])}"></div>`).join('')}
-  <div><label class="lbl">Rainout makeups cost credits?</label><select id="s-rainout_free" class="inp"><option value="true" ${S.set.rainout_free==='true'?'selected':''}>No, rainout makeups are free</option><option value="false" ${S.set.rainout_free!=='true'?'selected':''}>Yes, same cost as any booking</option></select></div>
-  <div><label class="lbl">Announcement banner (shown to everyone; leave empty for none)</label><textarea id="s-announcement" class="inp" rows="2">${esc(S.set.announcement)}</textarea></div>
+  ${SK.map(([k, l]) => fld(l, `<input id="s-${k}" type="number" min="0" class="inp" value="${esc(S.set[k])}">`)).join('')}
+  ${fld('Rainout makeups cost credits?', `<select id="s-rainout_free" class="inp"><option value="true" ${S.set.rainout_free==='true'?'selected':''}>No, rainout makeups are free</option><option value="false" ${S.set.rainout_free!=='true'?'selected':''}>Yes, same cost as any booking</option></select>`)}
+  ${fld('Announcement banner (shown to everyone; leave empty for none)', `<textarea id="s-announcement" class="inp" rows="2">${esc(S.set.announcement)}</textarea>`)}
   <button class="btn" onclick="saveSet()">Save settings</button></div></div>`;
 };
 async function saveSet() {
@@ -488,10 +603,24 @@ async function saveSet() {
   if (error) return toast(error.message, 1);
   audit('Settings changed', ''); await loadSet(); banner(); toast('Settings saved.');
 }
+
+/* ---------- ACCESS CONTROL (admin only) ---------- */
+const PERMS = [['book','Book diamonds for their team'],['view_dashboard','View dashboard'],['view_schedule','View schedule'],['add_slots','Add slots (manual and CSV)'],['assign_slots','Manually assign slots to teams'],['release_slots','Rainout, cancel + reopen, and delete slots'],['add_credits','Add or remove team credits'],['approve_members','Approve team requests'],['manage_teams','Add, rename and edit teams'],['manage_users','Edit users and team memberships'],['manage_rules','Diamond levels, age-group rules, settings'],['new_season','Start a new season (reset credits)'],['view_audit','View audit log']];
+V.acc = async () => {
+  const { data } = await db.from('permissions').select('*');
+  const ok = (p, r) => r === 'admin' || !!(data || []).find(x => x.perm === p && x.role === r)?.allowed;
+  $('view').innerHTML = `<h2 class="font-bold text-lg mb-1">Access control</h2><p class="text-sm text-slate-600 mb-3">Tick what each role can do. Admins can always do everything. Changes apply the next time that person loads the site.</p>
+  ${tbl(['Function','User','Scheduler','Admin'], PERMS.map(([p, l]) => row(`<td class="td">${l}</td>${['user','scheduler','admin'].map(r => `<td class="td"><input type="checkbox" ${ok(p, r) ? 'checked' : ''} ${r === 'admin' ? 'disabled' : ''} onchange="setPerm('${p}','${r}',this.checked)"></td>`).join('')}`)), '')}`;
+};
+async function setPerm(p, r, ok) {
+  const { error } = await db.from('permissions').upsert({ perm: p, role: r, allowed: ok }); if (error) return toast(error.message, 1);
+  audit('Access changed', `${p} / ${r} = ${ok}`); toast('Saved.');
+}
+
+/* ---------- AUDIT LOG ---------- */
 V.aud = async () => {
   const { data } = await db.from('audit_log').select('*').order('created_at', { ascending: false }).limit(150);
-  $('view').innerHTML = `<h2 class="font-bold text-lg mb-2">Audit log (latest 150)</h2><div class="card !p-0 overflow-x-auto"><table class="w-full text-sm"><tbody>
-  ${(data || []).map(r => `<tr class="border-t border-slate-100"><td class="td whitespace-nowrap text-slate-500">${new Date(r.created_at).toLocaleString('en-CA',{dateStyle:'medium',timeStyle:'short'})}</td><td class="td">${esc(r.actor_email)}</td><td class="td font-semibold">${esc(r.action)}</td><td class="td text-slate-600">${esc(r.details)}</td></tr>`).join('') || '<tr><td class="td text-slate-500">Nothing logged yet.</td></tr>'}</tbody></table></div>`;
+  $('view').innerHTML = `<h2 class="font-bold text-lg mb-2">Audit log (latest 150)</h2>${tbl(['When','Who','Action','Details'], (data || []).map(r => row(`<td class="td whitespace-nowrap text-slate-500">${new Date(r.created_at).toLocaleString('en-CA',{dateStyle:'medium',timeStyle:'short'})}</td><td class="td">${esc(r.actor_email)}</td><td class="td font-semibold">${esc(r.action)}</td><td class="td text-slate-600">${esc(r.details)}</td>`)), 'Nothing logged yet.')}`;
 };
 
 /* ---------- LIVE UPDATES ---------- */
