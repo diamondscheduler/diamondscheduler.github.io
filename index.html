@@ -29,7 +29,7 @@
   <form onsubmit="authSubmit(event)" class="card w-full max-w-sm space-y-3">
     <h1 class="font-bold text-xl text-emerald-900">Diamond Portal</h1>
     <p class="text-sm text-slate-500">Members only. Sign in to see available diamonds.</p>
-    <div id="a-namebox" class="hidden"><label class="lbl">Your name</label><input id="a-name" class="inp"></div>
+    <div id="a-namebox" class="hidden space-y-3"><div><label class="lbl">Your name</label><input id="a-name" class="inp"></div><div><label class="lbl">Phone number</label><input id="a-phone" type="tel" class="inp"></div></div>
     <div><label class="lbl">Email</label><input id="a-email" type="email" required class="inp"></div>
     <div><label class="lbl">Password</label><input id="a-pw" type="password" required minlength="6" class="inp"></div>
     <button id="a-btn" class="btn w-full">Sign in</button>
@@ -47,7 +47,7 @@
 <div id="app" class="hidden">
   <header class="bg-emerald-900 text-white">
     <div class="max-w-6xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
-      <div><div id="ttl" class="font-bold text-lg leading-tight">Diamond Portal</div><div id="who" class="text-xs text-emerald-200"></div></div>
+      <div><div class="font-bold text-lg leading-tight">Diamond Portal</div><div id="who" class="text-xs text-emerald-200"></div></div>
       <div id="hdr" class="flex flex-wrap items-center gap-2"></div>
     </div>
   </header>
@@ -78,13 +78,16 @@ const TIERS = ['Practice','Standard','Premium','Lit'];
 const TC = {Practice:'bg-slate-100 text-slate-700',Standard:'bg-emerald-100 text-emerald-800',Premium:'bg-amber-100 text-amber-900',Lit:'bg-violet-100 text-violet-800'};
 const tier = s => `<span class="tag ${TC[s.tier]}">${s.tier}</span>`;
 const cost = s => +S.set['cost_' + s.tier.toLowerCase()];
-const calc = (s,r) => r === 'Rainout' && S.set.rainout_free === 'true' ? 0 : cost(s);
+const calc = (s,r) => r === 'Rescheduled Game' && S.set.rainout_free === 'true' ? 0 : cost(s);
 const stTag = s => `<span class="tag ${s==='Booked'?'bg-blue-100 text-blue-800':s==='Rainout'?'bg-red-100 text-red-800':'bg-emerald-100 text-emerald-800'}">${s}</span>`;
 const row = c => `<tr class="border-t border-slate-100">${c}</tr>`;
 const tbl = (h, rows, empty) => `<div class="card !p-0 overflow-x-auto"><table class="w-full text-sm"><thead><tr>${h.map(x => `<th class="th">${x}</th>`).join('')}</tr></thead><tbody>${rows.length ? rows.join('') : `<tr><td colspan="${h.length}" class="td text-center text-slate-500 py-6">${empty}</td></tr>`}</tbody></table></div>`;
 const fld = (l, h) => `<div><label class="lbl">${l}</label>${h}</div>`;
 const tierSel = (id, v) => `<select id="${id}" class="inp">${TIERS.map(t => `<option ${t===v?'selected':''}>${t}</option>`).join('')}</select>`;
-const mapLink = p => `<a class="text-xs text-emerald-800 underline" target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(p)}">map</a>`;
+const addrOf = m => m ? [m.address, m.city, [m.province, m.postal_code].filter(Boolean).join(' ')].filter(Boolean).join(', ') : '';
+const dmOf = s => S.dm.find(m => m.park_name === s.park_name && m.diamond_number === s.diamond_number);
+const mapLink = s => `<a class="text-xs text-emerald-800 underline" target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addrOf(dmOf(s)) || s.park_name)}">map</a>`;
+const addrLine = s => { const a = addrOf(dmOf(s)); return a ? `<div class="text-xs text-slate-500">${esc(a)}</div>` : ''; };
 function canUse(t, s) {
   if (!t) return true;
   const ex = f => S.exc.find(x => x.park_name === s.park_name && x.diamond_number === s.diamond_number && f(x));
@@ -133,7 +136,7 @@ const csvQ = v => `"${String(v ?? '').replace(/"/g,'""')}"`;
 let signup = false;
 function authMode() {
   signup = !signup;
-  $('a-namebox').classList.toggle('hidden', !signup);
+  $('a-namebox').classList.toggle('hidden', !signup); $('a-name').required = signup;
   $('a-btn').textContent = signup ? 'Create account' : 'Sign in';
   $('a-toggle').textContent = signup ? 'I already have an account' : 'Create an account';
 }
@@ -141,7 +144,7 @@ async function authSubmit(e) {
   e.preventDefault();
   const email = $('a-email').value.trim(), password = $('a-pw').value;
   if (signup) {
-    const { error } = await db.auth.signUp({ email, password, options: { data: { full_name: $('a-name').value.trim() }, emailRedirectTo: location.origin + location.pathname } });
+    const { error } = await db.auth.signUp({ email, password, options: { data: { full_name: $('a-name').value.trim(), phone: $('a-phone').value.trim() }, emailRedirectTo: location.origin + location.pathname } });
     if (error) return toast(error.message, 1);
     toast('Account created. Confirm your email, then sign in and choose your team.'); authMode();
   } else {
@@ -261,11 +264,11 @@ function showApp() {
 }
 function header() {
   $('ttl').textContent = S.assoc?.name || 'Diamond Portal';
-  $('who').textContent = `${S.profile.email} (${S.profile.is_developer ? 'developer' : S.role})`;
+  $('who').textContent = `${S.profile.full_name || S.profile.email} (${S.profile.is_developer ? 'developer' : S.role})`;
   const asel = S.assocs.length > 1 ? `<select class="rounded-lg px-2 py-1 text-sm text-slate-900" onchange="switchAssoc(this.value)">${S.assocs.map(a => `<option value="${a.id}" ${a.id===S.aid?'selected':''}>${esc(a.name)}</option>`).join('')}</select>` : '';
   const sel = S.myTeams.length ? `<select class="rounded-lg px-2 py-1 text-sm text-slate-900" onchange="switchTeam(this.value)">${S.myTeams.map(t => `<option value="${t.id}" ${t.id===S.team?.id?'selected':''}>${esc(t.name)}</option>`).join('')}</select>
     <span class="tag bg-amber-300 text-slate-900">${S.team?.tokens_remaining ?? 0} credits</span>` : '';
-  $('hdr').innerHTML = `${asel}${sel}${S.aid ? '<button class="btn2 !py-1" onclick="joinModal()">Join a team</button>' : ''}<button class="btn2 !py-1" onclick="db.auth.signOut()">Sign out</button>`;
+  $('hdr').innerHTML = `${asel}${sel}${S.aid ? '<button class="btn2 !py-1" onclick="joinModal()">Join a team</button>' : ''}<button class="btn2 !py-1" onclick="profileModal()">My profile</button><button class="btn2 !py-1" onclick="db.auth.signOut()">Sign out</button>`;
 }
 function tabs() {
   let sep = false;
@@ -290,7 +293,7 @@ async function loadSlots() {
   if (error) return toast(error.message, 1);
   S.slots = data || [];
 }
-V.open = async () => { await Promise.all([loadSlots(), loadRules(), loadSet()]); drawOpen(); };
+V.open = async () => { await Promise.all([loadSlots(), loadRules(), loadSet(), loadMaster(), loadTeams()]); drawOpen(); };
 const WD = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 const isoDow = s => { const [y, m, d] = s.split('-'); const g = new Date(y, m - 1, d).getDay(); return g === 0 ? 7 : g; };
 function openFiltered() {
@@ -313,7 +316,7 @@ function drawOpen() {
     <div class="flex flex-wrap gap-4 text-sm"><span class="font-semibold text-slate-600">Days:</span>${WD.map((n, i) => `<label><input type="checkbox" ${f.days.includes(i+1)?'checked':''} onchange="toggleDay(${i+1},this.checked)"> ${n}</label>`).join('')}</div></div>
     ${S.cal ? calHTML(list) : tbl(['Date','Time','Diamond','Level','Credits',''], list.slice(0,400).map(s => row(
       `<td class="td whitespace-nowrap font-medium">${D(s.date)}</td><td class="td whitespace-nowrap">${T(s.start_time)} - ${T(s.end_time)}</td>
-       <td class="td">${esc(s.park_name)} #${esc(s.diamond_number)} ${mapLink(s.park_name)}</td><td class="td">${tier(s)}</td><td class="td">${cost(s)}</td><td class="td text-right">${act(s)}</td>`)),
+       <td class="td">${esc(s.park_name)} #${esc(s.diamond_number)} ${mapLink(s)}${addrLine(s)}</td><td class="td">${tier(s)}</td><td class="td">${cost(s)}</td><td class="td text-right">${act(s)}</td>`)),
       'No open diamonds match these filters.')}`;
 }
 function calHTML(L) {
@@ -330,14 +333,15 @@ function calHTML(L) {
 function bookModal(id) {
   const s = S.slots.find(x => x.id === id); window._s = s;
   modal(`<h3 class="font-bold text-lg mb-2">Book this diamond</h3>
-    <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm mb-3"><b>${esc(s.park_name)} #${esc(s.diamond_number)}</b> ${tier(s)}<br>${D(s.date)}, ${T(s.start_time)} - ${T(s.end_time)}</div>
-    <p class="text-sm mb-2">Booking for <b>${esc(S.team.name)}</b> (${S.team.tokens_remaining} credits)</p>
-    ${fld('Event type', `<select id="b-r" class="inp mb-3" onchange="$('b-c').textContent=calc(window._s,this.value)"><option>Practice</option><option>Exhibition Game</option><option value="Rainout">Rainout</option></select>`)}
-    <p class="text-sm mb-4">Cost: <b id="b-c">${calc(s,'Practice')}</b> credit(s). Free cancellation until ${S.set.cancel_hours} hours before start.</p>
+    <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm mb-3"><b>${esc(s.park_name)} #${esc(s.diamond_number)}</b> ${tier(s)}${addrLine(s)}<div class="mt-1">${D(s.date)}, ${T(s.start_time)} - ${T(s.end_time)}</div></div>
+    <p class="text-sm mb-3">Booking for <b>${esc(S.team.name)}</b> (${S.team.tokens_remaining} credits)</p>
+    ${evFields('b', {}, S.team.id)}
+    <p class="text-sm my-4">Cost: <b id="b-c">${calc(s, 'Practice')}</b> credit(s). Free cancellation until ${S.set.cancel_hours} hours before start.</p>
     <div class="flex gap-2"><button class="btn2 w-1/2" onclick="closeModal()">Cancel</button><button class="btn w-1/2" onclick="doBook('${id}')">Confirm booking</button></div>`);
 }
 async function doBook(id) {
-  await rpc('book_diamond', { p_diamond_id: id, p_team_id: S.team.id, p_reason: $('b-r').value });
+  const e = evRead('b'); if (!e) return;
+  await rpc('book_diamond', { p_diamond_id: id, p_team_id: S.team.id, p_reason: e.r, p_game: e.g, p_opp_name: e.n, p_opp_team: e.t });
   closeModal(); await loadMem(); header(); await loadSlots(); if (S.tab === 'open') drawOpen();
 }
 
@@ -360,7 +364,7 @@ function drawMine() {
     <div class="w-48">${fld('Diamond', `<select class="inp" onchange="S.mf.diamond=this.value;drawMine()"><option value="">All diamonds</option>${dias.map(x => `<option ${x===f.diamond?'selected':''}>${esc(x)}</option>`).join('')}</select>`)}</div>
     <div class="w-40">${fld('Status', `<select class="inp" onchange="S.mf.status=this.value;drawMine()"><option value="">All</option>${['Booked','Rainout'].map(x => `<option ${x===f.status?'selected':''}>${x}</option>`).join('')}</select>`)}</div></div>
   ${tbl(['Date','Where','Event type','Cost','Status',''], L.map(d => row(`<td class="td">${D(d.date)}<br><span class="text-xs text-slate-500">${T(d.start_time)} - ${T(d.end_time)}</span></td>
-    <td class="td">${esc(d.park_name)} #${esc(d.diamond_number)} ${tier(d)}</td><td class="td">${esc(d.booking_reason)}</td><td class="td">${d.token_cost ?? 0}</td><td class="td">${stTag(d.status)}</td>
+    <td class="td">${esc(d.park_name)} #${esc(d.diamond_number)} ${tier(d)}</td><td class="td">${evText(d)}</td><td class="td">${d.token_cost ?? 0}</td><td class="td">${stTag(d.status)}</td>
     <td class="td text-right whitespace-nowrap"><button class="btng" onclick="ics('${d.id}')">Add to calendar</button>${d.status==='Booked'&&d.date>=t?` <button class="btnr" onclick="cancelB('${d.id}')">Cancel</button>`:''}</td>`)),
     !f.past && !f.future ? 'Tick Past bookings and/or Future bookings to see them.' : 'No bookings match. Find a slot under Open diamonds.')}
   <h2 class="font-bold text-lg mt-6 mb-2">Credit history <span class="text-sm font-normal text-slate-500">(balance: ${S.team.tokens_remaining})</span></h2>
@@ -374,7 +378,7 @@ function ics(id) {
   const d = S.mine.find(x => x.id === id), f = (dt, t) => dt.replace(/-/g,'') + 'T' + t.slice(0,5).replace(':','') + '00';
   dl(['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Diamond Portal//EN','BEGIN:VEVENT',`UID:${d.id}@diamondportal`,
     `DTSTAMP:${new Date().toISOString().replace(/[-:]|\.\d+/g,'')}`,`DTSTART:${f(d.date,d.start_time)}`,`DTEND:${f(d.date,d.end_time)}`,
-    `SUMMARY:${d.booked_by_team} ${d.booking_reason}`,`LOCATION:${d.park_name} Diamond ${d.diamond_number}`,'END:VEVENT','END:VCALENDAR'].join('\r\n'), 'booking.ics', 'text/calendar');
+    `SUMMARY:${d.booked_by_team} ${d.booking_reason}${d.opponent_name ? ' vs ' + d.opponent_name : ''}`,`LOCATION:${d.park_name} Diamond ${d.diamond_number}`,'END:VEVENT','END:VCALENDAR'].join('\r\n'), 'booking.ics', 'text/calendar');
 }
 
 /* ---------- DASHBOARD (availability) ---------- */
@@ -408,55 +412,77 @@ function drill(i) {
 
 /* ---------- APPROVALS ---------- */
 V.appr = async () => {
-  const { data: p } = await db.from('team_members').select('*,profiles(email,full_name),teams(name)').eq('status','pending').order('requested_at');
+  const { data: p } = await db.from('team_members').select('*,profiles(email,full_name,phone),teams(name)').eq('status','pending').order('requested_at');
   S.pend = p.length; tabs();
   $('view').innerHTML = `<h2 class="font-bold text-lg mb-2">Pending team requests</h2>${tbl(['Person','Request',''], p.map(r => row(
-    `<td class="td">${esc(r.profiles?.full_name || '')}<br><span class="text-xs text-slate-500">${esc(r.profiles?.email)}</span></td><td class="td">wants to join <b>${esc(r.teams?.name)}</b></td>
+    `<td class="td">${esc(r.profiles?.full_name || '')}<br><span class="text-xs text-slate-500">${esc(r.profiles?.email)}${r.profiles?.phone ? ' &middot; ' + esc(r.profiles.phone) : ''}</span></td><td class="td">wants to join <b>${esc(r.teams?.name)}</b></td>
      <td class="td text-right whitespace-nowrap"><button class="btn" onclick="decide('${r.id}',true)">Approve</button> <button class="btnr" onclick="decide('${r.id}',false)">Reject</button></td>`)), 'No requests waiting.')}`;
 };
 async function decide(id, ok) { if (await rpc('decide_membership', { p_member_id: id, p_approve: ok })) V.appr(); }
 
 /* ---------- SCHEDULE (informational + actions) ---------- */
 V.sched = async () => {
-  await loadTeams();
-  const { data } = await db.from('diamonds').select('*').gte('date', ymd(addDays(-30))).order('date').order('start_time').order('park_name').order('diamond_number');
+  await Promise.all([loadTeams(), loadMaster()]);
+  const { data } = await db.from('diamonds').select('*,team:teams!booked_by_team_id(division)').gte('date', ymd(addDays(-30)))
+    .order('date').order('start_time').order('park_name').order('diamond_number');
   S.all = data || []; drawSched();
 };
 const schedList = () => S.all.filter(s => (!S.sf.status || s.status === S.sf.status) && (!S.sf.park || s.park_name === S.sf.park) && (!S.sf.from || s.date >= S.sf.from));
+const byCell = s => !s.booked_by_team ? '-' : `<b>${esc(s.booked_by_name || '(not recorded)')}</b>
+  <div class="text-xs text-slate-500">${esc(String(s.booked_by_name || '').startsWith('Assigned') ? '' : (s.coach_email || ''))}${s.booked_by_phone ? ' &middot; ' + esc(s.booked_by_phone) : ''}</div>
+  ${s.booked_at ? `<div class="text-xs text-slate-400">${new Date(s.booked_at).toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' })}</div>` : ''}`;
 function drawSched() {
   const f = S.sf, parks = [...new Set(S.all.map(s => s.park_name))].sort(), L = schedList();
   const acts = s => {
     let a = '';
-    if (s.status === 'Available') { if (can('assign_slots')) a += `<button class="btn" onclick="assignModal('${s.id}')">Assign</button> `; if (can('release_slots')) a += `<button class="btnr" onclick="delSlot('${s.id}')">Delete</button>`; }
-    else if (s.status === 'Booked' && can('release_slots')) a += `<button class="btnr" onclick="rel('${s.id}','rainout')">Rainout + refund</button> <button class="btn2 !py-1 !text-xs" onclick="rel('${s.id}','cancel')">Cancel + reopen</button>`;
-    else if (s.status === 'Rainout' && can('release_slots')) a += `<button class="btnr" onclick="delSlot('${s.id}')">Delete</button>`;
+    if (s.status === 'Available' && can('assign_slots')) a += `<button class="btn" onclick="assignModal('${s.id}')">Assign</button> `;
+    if (can('add_slots') || can('assign_slots')) a += `<button class="btn2 !py-1 !text-xs" onclick="editSlot('${s.id}')">Edit</button> `;
+    if (s.status === 'Booked' && can('release_slots')) a += `<button class="btnr" onclick="rel('${s.id}','rainout')">Rainout + refund</button> <button class="btn2 !py-1 !text-xs" onclick="rel('${s.id}','cancel')">Cancel + reopen</button>`;
+    if (s.status !== 'Booked' && can('release_slots')) a += `<button class="btnr" onclick="delSlot('${s.id}')">Delete</button>`;
     return a;
   };
   $('view').innerHTML = `<div class="card mb-4 text-sm"><b>What the buttons do</b><ul class="mt-2 space-y-1 text-slate-700">
-    <li><b>Assign</b>: puts an open slot on a team of your choice. You can choose whether to charge the team credits. Age-group rules and booking limits are ignored.</li>
-    <li><b>Rainout + refund</b>: the booked game or practice was cancelled by weather. The team gets its credits back and the slot stays on the schedule marked Rainout (it is not reopened for booking).</li>
-    <li><b>Cancel + reopen</b>: removes the team's booking, refunds its credits and puts the slot back as Open so another team can book it.</li>
+    <li><b>Assign</b>: puts an open slot on a team of your choice, with the event type and opponent. You choose whether to charge credits. Age-group rules and booking limits are ignored.</li>
+    <li><b>Edit</b>: changes a slot's date, time or level, and (for booked slots) the event type, game number and opponent. Credits already charged are not recalculated.</li>
+    <li><b>Rainout + refund</b>: weather cancelled the booked game or practice. The team gets its credits back and the slot stays on the schedule marked Rainout (it is not reopened).</li>
+    <li><b>Cancel + reopen</b>: removes the booking, refunds the credits and puts the slot back as Open so another team can book it.</li>
     <li><b>Delete</b>: permanently removes a slot that nobody has booked (for example a permit you no longer hold).</li></ul></div>
   <div class="card !p-3 grid grid-cols-2 md:grid-cols-5 gap-3 items-end mb-4">
     ${fld('Status', `<select class="inp" onchange="S.sf.status=this.value;drawSched()"><option value="">All</option>${['Available','Booked','Rainout'].map(x => `<option ${x===f.status?'selected':''}>${x}</option>`).join('')}</select>`)}
     ${fld('Park', `<select class="inp" onchange="S.sf.park=this.value;drawSched()"><option value="">All</option>${parks.map(p => `<option ${p===f.park?'selected':''}>${esc(p)}</option>`).join('')}</select>`)}
     ${fld('From date', `<input type="date" class="inp" value="${f.from}" onchange="S.sf.from=this.value;drawSched()">`)}
     <button class="btn2" onclick="S.sf={status:'',park:'',from:''};drawSched()">Clear</button><button class="btn2" onclick="exportCSV()">Export CSV (${L.length})</button></div>
-  ${tbl(['When','Diamond','Level','Status','Team','Actions'], L.slice(0,300).map(s => row(`<td class="td whitespace-nowrap">${D(s.date)}<br><span class="text-xs text-slate-500">${T(s.start_time)} - ${T(s.end_time)}</span></td>
+  ${tbl(['When','Diamond','Level','Status','Team','Event type','Booked by','Actions'], L.slice(0,300).map(s => row(`<td class="td whitespace-nowrap">${D(s.date)}<br><span class="text-xs text-slate-500">${T(s.start_time)} - ${T(s.end_time)}</span></td>
     <td class="td">${esc(s.park_name)} #${esc(s.diamond_number)}</td><td class="td">${tier(s)}</td><td class="td">${stTag(s.status)}</td>
-    <td class="td">${s.booked_by_team ? `<b>${esc(s.booked_by_team)}</b><br><span class="text-xs text-slate-500">${esc(s.booking_reason)} &middot; ${esc(s.coach_email || '')}</span>` : '-'}</td><td class="td text-right whitespace-nowrap">${acts(s)}</td>`)), 'No slots match.')}
+    <td class="td">${s.booked_by_team ? `<b>${esc(s.booked_by_team)}</b>${s.team?.division ? `<div class="text-xs text-slate-500">Age group: ${esc(s.team.division)}</div>` : ''}` : '-'}</td>
+    <td class="td">${s.booking_reason ? evText(s) : '-'}</td><td class="td">${byCell(s)}</td><td class="td text-right"><div class="flex flex-wrap gap-1 justify-end">${acts(s)}</div></td>`)), 'No slots match.')}
   ${L.length > 300 ? `<p class="p-3 text-xs text-slate-500">Showing the first 300 of ${L.length}. Use filters to narrow down.</p>` : ''}`;
 }
 function assignModal(id) {
   const s = S.all.find(x => x.id === id); window._s = s;
   modal(`<h3 class="font-bold text-lg mb-2">Assign this slot to a team</h3><div class="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm mb-3"><b>${esc(s.park_name)} #${esc(s.diamond_number)}</b> ${tier(s)}<br>${D(s.date)}, ${T(s.start_time)} - ${T(s.end_time)}</div>
     <div class="space-y-3">${fld('Team', `<select id="as-t" class="inp">${S.teams.filter(t => t.active).map(t => `<option value="${t.id}">${esc(t.name)} (${t.tokens_remaining} credits)</option>`).join('')}</select>`)}
-    ${fld('Event type', `<select id="as-r" class="inp" onchange="$('as-c').textContent=calc(window._s,this.value)"><option>Practice</option><option>Exhibition Game</option><option value="Rainout">Rainout</option></select>`)}
-    <label class="text-sm flex gap-2"><input type="checkbox" id="as-ch" checked> Charge <b id="as-c">${calc(s,'Practice')}</b> credit(s) to the team</label></div>
+    <div>${evFields('as', {}, null)}</div>
+    <label class="text-sm flex gap-2"><input type="checkbox" id="as-ch" checked> Charge <b id="as-c">${calc(s, 'Practice')}</b> credit(s) to the team</label></div>
     <div class="flex gap-2 mt-4"><button class="btn2 w-1/2" onclick="closeModal()">Cancel</button><button class="btn w-1/2" onclick="doAssign('${id}')">Assign</button></div>`);
 }
 async function doAssign(id) {
-  if (await rpc('assign_diamond', { p_diamond_id: id, p_team_id: $('as-t').value, p_reason: $('as-r').value, p_charge: $('as-ch').checked })) { closeModal(); V.sched(); }
+  const e = evRead('as'); if (!e) return;
+  if (await rpc('assign_diamond', { p_diamond_id: id, p_team_id: $('as-t').value, p_reason: e.r, p_charge: $('as-ch').checked, p_game: e.g, p_opp_name: e.n, p_opp_team: e.t })) { closeModal(); V.sched(); }
+}
+function editSlot(id) {
+  const s = S.all.find(x => x.id === id), ts = can('add_slots'), booked = s.status === 'Booked' && can('assign_slots'); window._s = s;
+  modal(`<h3 class="font-bold text-lg mb-1">Edit slot</h3><p class="text-xs text-slate-500 mb-3">${esc(s.park_name)} #${esc(s.diamond_number)}${s.booked_by_team ? ' &middot; ' + esc(s.booked_by_team) : ''}. Credits already charged are not recalculated.</p>
+    <div class="grid grid-cols-2 gap-3">${fld('Date', `<input id="ed-date" type="date" class="inp" value="${s.date}" ${ts ? '' : 'disabled'}>`)}${fld('Level', tierSel('ed-tier', s.tier).replace('<select', ts ? '<select' : '<select disabled'))}
+    ${fld('Start time', `<input id="ed-s" type="time" class="inp" value="${s.start_time.slice(0,5)}" ${ts ? '' : 'disabled'}>`)}${fld('End time', `<input id="ed-e" type="time" class="inp" value="${s.end_time.slice(0,5)}" ${ts ? '' : 'disabled'}>`)}</div>
+    ${booked ? `<div class="mt-3">${evFields('ed', { reason: s.booking_reason, game: s.game_number, oppName: s.opponent_name, oppTeam: s.opponent_team_id }, s.booked_by_team_id)}</div>` : ''}
+    <div class="flex gap-2 mt-4"><button class="btn2 w-1/2" onclick="closeModal()">Cancel</button><button class="btn w-1/2" onclick="doEdit('${id}')">Save changes</button></div>`);
+}
+async function doEdit(id) {
+  const s = S.all.find(x => x.id === id), booked = s.status === 'Booked' && can('assign_slots');
+  const e = booked ? evRead('ed') : { r: s.booking_reason, g: s.game_number, n: s.opponent_name, t: s.opponent_team_id };
+  if (!e) return;
+  if (await rpc('edit_slot', { p_id: id, p_date: $('ed-date').value, p_start: $('ed-s').value, p_end: $('ed-e').value, p_tier: $('ed-tier').value, p_reason: e.r, p_game: e.g, p_opp_name: e.n, p_opp_team: e.t })) { closeModal(); V.sched(); }
 }
 async function rel(id, mode) {
   if (!confirm(mode === 'rainout' ? 'Mark as rainout and refund the team?' : 'Cancel this booking, refund the team and reopen the slot?')) return;
@@ -469,8 +495,9 @@ async function delSlot(id) {
   audit('Slot deleted', id); V.sched();
 }
 function exportCSV() {
-  const h = ['park_name','diamond_number','date','start_time','end_time','tier','status','booked_by_team','booking_reason','coach_email'];
-  dl([h.join(','), ...schedList().map(s => h.map(k => csvQ(s[k])).join(','))].join('\n'), 'diamond_schedule.csv', 'text/csv');
+  const h = ['park_name','diamond_number','date','start_time','end_time','level','status','team','age_group','event_type','game_number','opponent','booked_by','booked_by_email','booked_by_phone'];
+  const line = s => [s.park_name, s.diamond_number, s.date, s.start_time, s.end_time, s.tier, s.status, s.booked_by_team, s.team?.division, s.booking_reason, s.game_number, s.opponent_name, s.booked_by_name, s.coach_email, s.booked_by_phone].map(csvQ).join(',');
+  dl([h.join(','), ...schedList().map(line)].join('\n'), 'diamond_schedule.csv', 'text/csv');
 }
 
 /* ---------- ADD SLOTS (manual + CSV) ---------- */
@@ -598,15 +625,15 @@ async function newSeason() {
 /* ---------- USERS ---------- */
 V.users = async () => {
   const [{ data: u }, { data: m }, { data: iv }] = await Promise.all([
-    db.from('assoc_users').select('user_id,role,profiles(email,full_name)').eq('association_id', S.aid),
+    db.from('assoc_users').select('user_id,role,profiles(email,full_name,phone)').eq('association_id', S.aid),
     db.from('team_members').select('id,user_id,status,teams(id,name,division)'),
     db.from('invites').select('*').order('email')]);
-  S.users = (u || []).map(x => ({ id: x.user_id, role: x.role, email: x.profiles?.email || '', full_name: x.profiles?.full_name || '' })).sort((a, b) => a.email.localeCompare(b.email));
+  S.users = (u || []).map(x => ({ id: x.user_id, role: x.role, email: x.profiles?.email || '', full_name: x.profiles?.full_name || '', phone: x.profiles?.phone || '' })).sort((a, b) => a.email.localeCompare(b.email));
   S.um = m || []; S.inv = iv || []; await loadTeams();
   const groups = [...new Set(S.teams.map(t => t.division).filter(Boolean))].sort();
   $('view').innerHTML = `<div class="flex justify-between items-center mb-3"><h2 class="font-bold text-lg">Users</h2><button class="btn" onclick="addUserModal()">Add person</button></div>
     <div class="card grid md:grid-cols-3 gap-3 mb-4">
-      ${fld('Search name or email', `<input class="inp" value="${esc(S.uf.q)}" oninput="S.uf.q=this.value;drawUserList()">`)}
+      ${fld('Search name, email or phone', `<input class="inp" value="${esc(S.uf.q)}" oninput="S.uf.q=this.value;drawUserList()">`)}
       ${fld('Team', `<select class="inp" onchange="S.uf.team=this.value;drawUserList()"><option value="">All teams</option>${S.teams.map(t => `<option value="${t.id}" ${t.id===S.uf.team?'selected':''}>${esc(t.name)}</option>`).join('')}</select>`)}
       ${fld('Age group', `<select class="inp" onchange="S.uf.group=this.value;drawUserList()"><option value="">All groups</option>${groups.map(g => `<option ${g===S.uf.group?'selected':''}>${esc(g)}</option>`).join('')}</select>`)}</div>
     <div id="ulist"></div>
@@ -617,33 +644,33 @@ const userTeams = id => S.um.filter(y => y.user_id === id && y.status === 'appro
 function drawUserList() {
   const f = S.uf, q = f.q.toLowerCase();
   const L = S.users.filter(x => { const ms = userTeams(x.id);
-    return (!q || x.full_name.toLowerCase().includes(q) || x.email.toLowerCase().includes(q)) && (!f.team || ms.some(y => y.teams.id === f.team)) && (!f.group || ms.some(y => y.teams.division === f.group)); });
-  $('ulist').innerHTML = tbl(['User','Role','Teams (age group)',''], L.map(x => row(
-    `<td class="td">${esc(x.full_name)}<br><span class="text-xs text-slate-500">${esc(x.email)}</span></td>
+    return (!q || x.full_name.toLowerCase().includes(q) || x.email.toLowerCase().includes(q) || x.phone.includes(q)) && (!f.team || ms.some(y => y.teams.id === f.team)) && (!f.group || ms.some(y => y.teams.division === f.group)); });
+  $('ulist').innerHTML = tbl(['Name','Contact','Role','Teams (age group)',''], L.map(x => row(
+    `<td class="td font-medium">${esc(x.full_name || '(no name)')}</td><td class="td text-xs text-slate-600">${esc(x.email)}<br>${esc(x.phone || 'no phone')}</td>
      <td class="td"><span class="tag ${x.role==='admin'?'bg-amber-100 text-amber-900':x.role==='scheduler'?'bg-blue-100 text-blue-800':'bg-slate-100 text-slate-700'}">${x.role}</span></td>
      <td class="td">${userTeams(x.id).map(y => `<div>${esc(y.teams.name)}${y.teams.division ? ` <span class="text-xs text-slate-500">(${esc(y.teams.division)})</span>` : ''}</div>`).join('') || '-'}</td>
      <td class="td text-right"><button class="btn2 !py-1" onclick="editUser('${x.id}')">Edit</button></td>`)), 'No users match.');
 }
 function addUserModal() {
   modal(`<h3 class="font-bold text-lg mb-1">Add a person</h3><p class="text-xs text-slate-500 mb-3">If they already have a login they are added right away. Otherwise they are added automatically when they create an account with this email.</p><div class="space-y-3">
-    ${fld('Email', '<input id="n-email" type="email" class="inp">')}${fld('Name', '<input id="n-name" class="inp">')}
+    ${fld('Email', '<input id="n-email" type="email" class="inp">')}${fld('Name', '<input id="n-name" class="inp">')}${fld('Phone number', '<input id="n-phone" type="tel" class="inp">')}
     ${fld('Role', `<select id="n-role" class="inp" ${isAdmin() ? '' : 'disabled'}><option>user</option><option>scheduler</option><option>admin</option></select>`)}
     <div><div class="lbl">Teams (approved immediately)</div><div class="max-h-40 overflow-y-auto border border-slate-200 rounded-lg p-2 text-sm">${S.teams.filter(t => t.active).map(t => `<label class="block"><input type="checkbox" class="n-team" value="${t.id}"> ${esc(t.name)} ${t.division ? `<span class="text-xs text-slate-500">(${esc(t.division)})</span>` : ''}</label>`).join('') || 'No teams yet.'}</div></div></div>
     <div class="flex gap-2 mt-4"><button class="btn2 w-1/2" onclick="closeModal()">Cancel</button><button class="btn w-1/2" onclick="doAddUser()">Add person</button></div>`);
 }
 async function doAddUser() {
-  if (await rpc('add_user', { p_email: $('n-email').value, p_name: $('n-name').value, p_role: $('n-role').value, p_team_ids: [...document.querySelectorAll('.n-team:checked')].map(x => x.value) })) { closeModal(); V.users(); }
+  if (await rpc('add_user', { p_email: $('n-email').value, p_name: $('n-name').value, p_phone: $('n-phone').value, p_role: $('n-role').value, p_team_ids: [...document.querySelectorAll('.n-team:checked')].map(x => x.value) })) { closeModal(); V.users(); }
 }
 async function rmInvite(id) { if (await rpc('remove_invite', { p_id: id })) V.users(); }
 function editUser(id) {
   const u = S.users.find(x => x.id === id), ms = S.um.filter(y => y.user_id === id), lock = !isAdmin() || id === S.user.id;
   modal(`<h3 class="font-bold text-lg mb-1">Edit user</h3><p class="text-xs text-slate-500 mb-3">${esc(u.email)}</p><div class="space-y-3">
-    ${fld('Name', `<input id="u-name" class="inp" value="${esc(u.full_name)}">`)}
+    ${fld('Name', `<input id="u-name" class="inp" value="${esc(u.full_name)}">`)}${fld('Phone number', `<input id="u-phone" type="tel" class="inp" value="${esc(u.phone)}">`)}
     ${fld('Role', `<select id="u-role" class="inp" ${lock ? 'disabled' : ''}>${['user','scheduler','admin'].map(r => `<option ${r===u.role?'selected':''}>${r}</option>`).join('')}</select>${lock ? '<p class="text-xs text-slate-500 mt-1">Only an admin can change roles, and not their own.</p>' : ''}`)}
     <div><div class="lbl">Teams</div>${ms.map(y => `<div class="flex justify-between items-center text-sm py-1 border-b border-slate-100"><span>${esc(y.teams?.name)} <span class="text-xs text-slate-500">(${y.status})</span></span><button class="btnr" onclick="rmMember('${y.id}','${id}')">Remove</button></div>`).join('') || '<p class="text-sm text-slate-500">Not on any team.</p>'}</div></div>
     <div class="flex gap-2 mt-4"><button class="btn2 w-1/2" onclick="closeModal()">Cancel</button><button class="btn w-1/2" onclick="saveUser('${id}')">Save user</button></div>`);
 }
-async function saveUser(id) { if (await rpc('update_user', { p_user: id, p_name: $('u-name').value, p_role: $('u-role').value })) { closeModal(); V.users(); } }
+async function saveUser(id) { if (await rpc('update_user', { p_user: id, p_name: $('u-name').value, p_phone: $('u-phone').value, p_role: $('u-role').value })) { closeModal(); V.users(); } }
 async function rmMember(mid, uid) { if (confirm('Remove this person from the team?') && await rpc('remove_member', { p_member_id: mid })) { await V.users(); editUser(uid); } }
 
 /* ---------- DIAMONDS: LEVELS, AGE-GROUP RULES, EXCEPTIONS ---------- */
@@ -687,7 +714,7 @@ V.set = async () => {
   await loadSet();
   $('view').innerHTML = `<div class="card max-w-xl"><h2 class="font-bold text-lg mb-3">Booking rules</h2><div class="space-y-3">
   ${SK.map(([k, l]) => fld(l, `<input id="s-${k}" type="number" min="0" class="inp" value="${esc(S.set[k])}">`)).join('')}
-  ${fld('Rainout makeups cost credits?', `<select id="s-rainout_free" class="inp"><option value="true" ${S.set.rainout_free==='true'?'selected':''}>No, rainout makeups are free</option><option value="false" ${S.set.rainout_free!=='true'?'selected':''}>Yes, same cost as any booking</option></select>`)}
+  ${fld('Rescheduled games cost credits?', `<select id="s-rainout_free" class="inp"><option value="true" ${S.set.rainout_free==='true'?'selected':''}>No, rescheduled games are free</option><option value="false" ${S.set.rainout_free!=='true'?'selected':''}>Yes, same cost as any booking</option></select>`)}
   ${fld('Announcement banner (shown to everyone; leave empty for none)', `<textarea id="s-announcement" class="inp" rows="2">${esc(S.set.announcement)}</textarea>`)}
   <button class="btn" onclick="saveSet()">Save settings</button></div></div>`;
 };
@@ -723,37 +750,47 @@ V.dm = async () => {
   const parks = [...new Set(S.dm.map(x => x.park_name))];
   $('view').innerHTML = `<div class="card mb-5"><h2 class="font-bold text-lg mb-3">Add a diamond</h2>
     <datalist id="parks">${parks.map(p => `<option value="${esc(p)}">`).join('')}</datalist>
-    <div class="grid grid-cols-2 md:grid-cols-5 gap-3 items-end">${fld('Park', '<input id="m-park" list="parks" class="inp">')}${fld('Diamond number or name', '<input id="m-num" class="inp">')}${fld('Level', tierSel('m-tier', 'Standard'))}${fld('Notes', '<input id="m-notes" class="inp">')}<button class="btn" onclick="addDiamond()">Add diamond</button></div>
+    <datalist id="provs">${['ON','AB','BC','MB','NB','NL','NS','NT','NU','PE','QC','SK','YT'].map(p => `<option value="${p}">`).join('')}</datalist>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 items-end">${fld('Park', '<input id="m-park" list="parks" class="inp">')}${fld('Diamond number or name', '<input id="m-num" class="inp">')}${fld('Level', tierSel('m-tier', 'Standard'))}${fld('Notes', '<input id="m-notes" class="inp">')}
+      ${fld('Address', '<input id="m-addr" class="inp" placeholder="123 Main Street">')}${fld('City', '<input id="m-city" class="inp">')}${fld('Province', '<input id="m-prov" list="provs" class="inp" maxlength="20">')}${fld('Postal code', '<input id="m-post" class="inp uppercase" maxlength="10">')}</div>
+    <button class="btn mt-3" onclick="addDiamond()">Add diamond</button>
     <div class="flex flex-wrap items-center gap-3 mt-4 pt-4 border-t border-slate-200 text-sm"><b>CSV</b><button class="btn2" onclick="dmCSV()">Download diamonds</button>
-    <span class="text-slate-500">Upload columns: park_name, diamond_number, tier, active, notes.</span><input type="file" accept=".csv" onchange="upDiamonds(event)"></div></div>
+    <span class="text-slate-500">Upload columns: park_name, diamond_number, tier, address, city, province, postal_code, active, notes.</span><input type="file" accept=".csv" onchange="upDiamonds(event)"></div></div>
   <h2 class="font-bold text-lg mb-1">Diamonds and levels</h2><p class="text-xs text-slate-500 mb-2">Changing a level updates this diamond's open slots. Booked slots keep the level they were booked at. Inactive diamonds cannot get new slots.</p>
-  ${tbl(['Diamond','Level','Active','Notes',''], S.dm.map(x => row(`<td class="td font-medium">${esc(x.park_name)} #${esc(x.diamond_number)}</td>
+  ${tbl(['Diamond','Address','Level','Active','Notes',''], S.dm.map(x => row(`<td class="td font-medium">${esc(x.park_name)} #${esc(x.diamond_number)}</td>
+    <td class="td text-slate-600">${esc(addrOf(x)) || '<span class="text-slate-400">no address</span>'}</td>
     <td class="td"><select class="inp !w-auto" onchange="dmField('${x.id}','tier',this.value)">${TIERS.map(t => `<option ${t===x.tier?'selected':''}>${t}</option>`).join('')}</select></td>
     <td class="td"><input type="checkbox" ${x.active?'checked':''} onchange="dmField('${x.id}','active',this.checked)"></td><td class="td text-slate-600">${esc(x.notes || '')}</td>
     <td class="td text-right"><button class="btn2 !py-1" onclick="editDiamond('${x.id}')">Edit</button></td>`)), 'No diamonds yet. Add your first one above.')}`;
 };
-const saveDia = (x, o) => rpc('save_diamond', { p_id: x.id, p_park: o.park ?? x.park_name, p_num: o.num ?? x.diamond_number, p_tier: o.tier ?? x.tier, p_active: o.active ?? x.active, p_notes: o.notes ?? x.notes });
+const saveDia = (x, o) => rpc('save_diamond', { p_id: x.id, p_park: o.park ?? x.park_name, p_num: o.num ?? x.diamond_number, p_tier: o.tier ?? x.tier, p_active: o.active ?? x.active, p_notes: o.notes ?? x.notes,
+  p_address: o.address ?? x.address, p_city: o.city ?? x.city, p_province: o.province ?? x.province, p_postal: o.postal ?? x.postal_code });
 async function dmField(id, k, v) { await saveDia(S.dm.find(x => x.id === id), { [k]: v }); V.dm(); }
 async function addDiamond() {
-  if (await rpc('save_diamond', { p_id: null, p_park: $('m-park').value, p_num: $('m-num').value, p_tier: $('m-tier').value, p_active: true, p_notes: $('m-notes').value })) V.dm();
+  if (await rpc('save_diamond', { p_id: null, p_park: $('m-park').value, p_num: $('m-num').value, p_tier: $('m-tier').value, p_active: true, p_notes: $('m-notes').value,
+    p_address: $('m-addr').value, p_city: $('m-city').value, p_province: $('m-prov').value, p_postal: $('m-post').value })) V.dm();
 }
 function editDiamond(id) {
   const x = S.dm.find(m => m.id === id);
   modal(`<h3 class="font-bold text-lg mb-1">Edit diamond</h3><p class="text-xs text-slate-500 mb-3">Renaming also renames this diamond's existing slots.</p><div class="space-y-3">
-    ${fld('Park', `<input id="e-park" class="inp" value="${esc(x.park_name)}">`)}${fld('Diamond number or name', `<input id="e-num" class="inp" value="${esc(x.diamond_number)}">`)}${fld('Notes', `<input id="e-notes" class="inp" value="${esc(x.notes || '')}">`)}</div>
+    ${fld('Park', `<input id="e-park" class="inp" value="${esc(x.park_name)}">`)}${fld('Diamond number or name', `<input id="e-num" class="inp" value="${esc(x.diamond_number)}">`)}
+    ${fld('Address', `<input id="e-addr" class="inp" value="${esc(x.address || '')}">`)}
+    <div class="grid grid-cols-3 gap-3">${fld('City', `<input id="e-city" class="inp" value="${esc(x.city || '')}">`)}${fld('Province', `<input id="e-prov" class="inp" value="${esc(x.province || '')}">`)}${fld('Postal code', `<input id="e-post" class="inp uppercase" value="${esc(x.postal_code || '')}">`)}</div>
+    ${fld('Notes', `<input id="e-notes" class="inp" value="${esc(x.notes || '')}">`)}</div>
     <div class="flex gap-2 mt-4"><button class="btn2 w-1/2" onclick="closeModal()">Cancel</button><button class="btn w-1/2" onclick="saveDiaModal('${id}')">Save</button></div>`);
 }
 async function saveDiaModal(id) {
-  if (await saveDia(S.dm.find(x => x.id === id), { park: $('e-park').value, num: $('e-num').value, notes: $('e-notes').value })) { closeModal(); V.dm(); }
+  if (await saveDia(S.dm.find(x => x.id === id), { park: $('e-park').value, num: $('e-num').value, notes: $('e-notes').value, address: $('e-addr').value, city: $('e-city').value, province: $('e-prov').value, postal: $('e-post').value })) { closeModal(); V.dm(); }
 }
-function dmCSV() { dl(['park_name,diamond_number,tier,active,notes', ...S.dm.map(x => [x.park_name, x.diamond_number, x.tier, x.active, x.notes].map(csvQ).join(','))].join('\n'), 'diamond_master.csv', 'text/csv'); }
+function dmCSV() { dl(['park_name,diamond_number,tier,address,city,province,postal_code,active,notes', ...S.dm.map(x => [x.park_name, x.diamond_number, x.tier, x.address, x.city, x.province, x.postal_code, x.active, x.notes].map(csvQ).join(','))].join('\n'), 'diamond_master.csv', 'text/csv'); }
 function upDiamonds(e) {
   const f = e.target.files[0]; if (!f) return;
   readObjs(f, async objs => {
     const rows = [], bad = [];
     objs.forEach((o, i) => { const t = TIERS.find(x => x.toLowerCase() === (o.tier || 'standard').toLowerCase());
       if (!o.park_name || !o.diamond_number || !t) return bad.push(i + 2);
-      rows.push({ association_id: S.aid, park_name: o.park_name, diamond_number: o.diamond_number, tier: t, active: !['false','0','no'].includes((o.active || 'true').toLowerCase()), notes: o.notes || null }); });
+      rows.push({ association_id: S.aid, park_name: o.park_name, diamond_number: o.diamond_number, tier: t, address: o.address || null, city: o.city || null, province: o.province || null,
+        postal_code: (o.postal_code || '').toUpperCase() || null, active: !['false','0','no'].includes((o.active || 'true').toLowerCase()), notes: o.notes || null }); });
     if (!rows.length) return toast('No valid rows. Each needs park_name, diamond_number and a valid tier.', 1);
     if (!confirm(`Import ${rows.length} diamond(s)? Existing diamonds are updated.${bad.length ? ` Skipping bad rows: ${bad.join(', ')}.` : ''}`)) return;
     const { error } = await db.from('diamond_master').upsert(rows, { onConflict: 'association_id,park_name,diamond_number' });
@@ -787,6 +824,42 @@ function editAssoc(id) {
 async function saveAssoc(id) {
   if (await rpc('update_association', { p_id: id, p_name: $('ea-n').value, p_code: $('ea-c').value, p_tz: $('ea-t').value, p_active: $('ea-a').checked })) {
     closeModal(); const { data } = await db.from('associations').select('*').order('name'); S.assocs = data || []; S.assoc = S.assocs.find(a => a.id === S.aid); header(); V.plat();
+  }
+}
+
+/* ---------- EVENT FIELDS AND PROFILE ---------- */
+const EVENTS = ['Practice', 'Game', 'Exhibition Game', 'Rescheduled Game'];
+const needsOpp = r => r === 'Game' || r === 'Exhibition Game';
+const evText = d => `${esc(d.booking_reason)}${d.game_number ? ` #${esc(d.game_number)}` : ''}${d.opponent_name ? `<div class="text-xs text-slate-500">vs ${esc(d.opponent_name)}</div>` : ''}`;
+// Event type + (for games) optional game number + opponent chosen from teams or typed in under OTHER
+function evFields(p, cur = {}, excl) {
+  const r = cur.reason || 'Practice', teams = S.teams.filter(t => t.active && t.id !== excl), isOther = !!cur.oppName && !cur.oppTeam;
+  return `${fld('Event type', `<select id="${p}-r" class="inp" onchange="evChange('${p}')">${EVENTS.map(e => `<option ${e===r?'selected':''}>${e}</option>`).join('')}</select>`)}
+    <div id="${p}-gb" class="space-y-3 mt-3 ${r === 'Practice' ? 'hidden' : ''}">${fld('Game # (optional)', `<input id="${p}-g" class="inp" value="${esc(cur.game || '')}">`)}
+    ${fld('Opponent', `<select id="${p}-o" class="inp" onchange="evChange('${p}')"><option value="">Select opponent...</option>${teams.map(t => `<option value="${t.id}" ${t.id===cur.oppTeam?'selected':''}>${esc(t.name)}${t.division ? ' (' + esc(t.division) + ')' : ''}</option>`).join('')}<option value="other" ${isOther?'selected':''}>OTHER (type it in)</option></select>`)}
+    <input id="${p}-ox" class="inp ${isOther ? '' : 'hidden'}" placeholder="Opponent name" value="${isOther ? esc(cur.oppName) : ''}"></div>`;
+}
+function evChange(p) {
+  const r = $(p + '-r').value;
+  $(p + '-gb').classList.toggle('hidden', r === 'Practice');
+  $(p + '-ox').classList.toggle('hidden', $(p + '-o').value !== 'other');
+  const c = $(p + '-c'); if (c && window._s) c.textContent = calc(window._s, r);
+}
+function evRead(p) {
+  const r = $(p + '-r').value; if (r === 'Practice') return { r, g: null, n: null, t: null };
+  const g = $(p + '-g').value.trim() || null, v = $(p + '-o').value; let n = null, t = null;
+  if (v === 'other') n = $(p + '-ox').value.trim() || null; else if (v) { t = v; n = S.teams.find(x => x.id === v)?.name || null; }
+  if (!n && needsOpp(r)) { toast('Select the opponent, or choose OTHER and type it in.', 1); return null; }
+  return { r, g, n, t };
+}
+function profileModal() {
+  modal(`<h3 class="font-bold text-lg mb-1">My profile</h3><p class="text-xs text-slate-500 mb-3">${esc(S.profile.email)}</p><div class="space-y-3">
+    ${fld('Name', `<input id="pf-name" class="inp" value="${esc(S.profile.full_name || '')}">`)}${fld('Phone number', `<input id="pf-phone" type="tel" class="inp" value="${esc(S.profile.phone || '')}">`)}</div>
+    <div class="flex gap-2 mt-4"><button class="btn2 w-1/2" onclick="closeModal()">Cancel</button><button class="btn w-1/2" onclick="saveProfile()">Save</button></div>`);
+}
+async function saveProfile() {
+  if (await rpc('update_my_profile', { p_name: $('pf-name').value, p_phone: $('pf-phone').value })) {
+    S.profile.full_name = $('pf-name').value.trim() || null; S.profile.phone = $('pf-phone').value.trim() || null; closeModal(); header();
   }
 }
 
