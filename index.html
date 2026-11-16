@@ -57,9 +57,17 @@
 </div>
 
 <script>
+// Show any crash on screen instead of a blank page
+function showFatal(m) {
+  let b = document.getElementById('fatal');
+  if (!b) { b = document.createElement('div'); b.id = 'fatal'; b.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99;background:#7f1d1d;color:#fff;padding:12px 16px;font:14px system-ui;white-space:pre-wrap'; document.body.appendChild(b); }
+  b.textContent = 'Something went wrong: ' + m + '\n(Please send this message to your developer.)';
+}
+window.addEventListener('error', e => showFatal(e.message + (e.lineno ? ' (line ' + e.lineno + ')' : '')));
+window.addEventListener('unhandledrejection', e => showFatal(e.reason?.message || String(e.reason)));
 const db = window.supabase.createClient('https://srxptffjytjzyobafmkv.supabase.co','sb_publishable_6d3TQR4H_CwT9j1Wg9cMUA_kSkcKYxf');
-const newF = () => ({ from: '', to: '', park: '', tier: '', days: [1,2,3,4,5,6,7] });
-const S = {user:null,profile:null,mem:[],myTeams:[],team:null,teams:[],set:{},perms:{},rules:[],exc:[],slots:[],mine:[],all:[],tab:'open',f:newF(),mf:{past:false,future:true,diamond:'',status:''},uf:{q:'',team:'',group:''},aid:null,assoc:null,assocs:[],role:'user',au:null,dm:[],inv:[],cal:false,cm:new Date(),pend:0,sf:{status:'',park:'',from:''}};
+const newF = () => ({ from: '', to: '', park: '', st: 'Available', tiers: ['Practice','Standard','Premium','Standard Lit','Premium Lit'], days: [1,2,3,4,5,6,7] });
+const S = {user:null,profile:null,mem:[],myTeams:[],team:null,teams:[],set:{},perms:{},rules:[],exc:[],slots:[],mine:[],all:[],tab:'open',f:newF(),mf:{past:false,future:true,diamond:'',status:''},uf:{q:'',team:'',group:''},aid:null,assoc:null,assocs:[],role:'user',au:null,dm:[],inv:[],tdesc:{},cal:false,cm:new Date(),pend:0,sf:{status:'',park:'',from:''}};
 const V = {};
 const $ = i => document.getElementById(i);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
@@ -74,18 +82,19 @@ const dl = (txt,name,type) => { const a = document.createElement('a'); a.href = 
 const modal = h => { $('mbody').innerHTML = h; $('modal').classList.remove('hidden'); };
 const closeModal = () => $('modal').classList.add('hidden');
 const audit = (a,d) => db.rpc('log_audit',{p_action:a,p_details:d||''});
-const TIERS = ['Practice','Standard','Premium','Lit'];
-const TC = {Practice:'bg-slate-100 text-slate-700',Standard:'bg-emerald-100 text-emerald-800',Premium:'bg-amber-100 text-amber-900',Lit:'bg-violet-100 text-violet-800'};
+const TIERS = ['Practice','Standard','Premium','Standard Lit','Premium Lit'];
+const TC = {Practice:'bg-slate-100 text-slate-700',Standard:'bg-emerald-100 text-emerald-800',Premium:'bg-amber-100 text-amber-900','Standard Lit':'bg-sky-100 text-sky-800','Premium Lit':'bg-violet-100 text-violet-800'};
 const tier = s => `<span class="tag ${TC[s.tier]}">${s.tier}</span>`;
-const cost = s => +S.set['cost_' + s.tier.toLowerCase()];
+const cost = s => +S.set['cost_' + s.tier.toLowerCase().replace(/ /g, '_')];
 const calc = (s,r) => r === 'Rescheduled Game' && S.set.rainout_free === 'true' ? 0 : cost(s);
-const stTag = s => `<span class="tag ${s==='Booked'?'bg-blue-100 text-blue-800':s==='Rainout'?'bg-red-100 text-red-800':'bg-emerald-100 text-emerald-800'}">${s}</span>`;
+const stTag = s => `<span class="tag ${s==='Booked'?'bg-blue-100 text-blue-800':s==='Rainout'?'bg-red-100 text-red-800':s==='On Hold'?'bg-amber-100 text-amber-900':'bg-emerald-100 text-emerald-800'}">${s}</span>`;
 const row = c => `<tr class="border-t border-slate-100">${c}</tr>`;
 const tbl = (h, rows, empty) => `<div class="card !p-0 overflow-x-auto"><table class="w-full text-sm"><thead><tr>${h.map(x => `<th class="th">${x}</th>`).join('')}</tr></thead><tbody>${rows.length ? rows.join('') : `<tr><td colspan="${h.length}" class="td text-center text-slate-500 py-6">${empty}</td></tr>`}</tbody></table></div>`;
 const fld = (l, h) => `<div><label class="lbl">${l}</label>${h}</div>`;
 const tierSel = (id, v) => `<select id="${id}" class="inp">${TIERS.map(t => `<option ${t===v?'selected':''}>${t}</option>`).join('')}</select>`;
 const addrOf = m => m ? [m.address, m.city, [m.province, m.postal_code].filter(Boolean).join(' ')].filter(Boolean).join(', ') : '';
 const dmOf = s => S.dm.find(m => m.park_name === s.park_name && m.diamond_number === s.diamond_number);
+const dn = o => esc(o.park_name) + (o.diamond_number ? ' #' + esc(o.diamond_number) : '');
 const mapLink = s => `<a class="text-xs text-emerald-800 underline" target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addrOf(dmOf(s)) || s.park_name)}">map</a>`;
 const addrLine = s => { const a = addrOf(dmOf(s)); return a ? `<div class="text-xs text-slate-500">${esc(a)}</div>` : ''; };
 function canUse(t, s) {
@@ -215,8 +224,8 @@ async function loadPerms() {
   S.perms = Object.fromEntries((data || []).filter(x => x.allowed).map(x => [x.perm, 1]));
 }
 async function loadRules() {
-  const [a, b] = await Promise.all([db.from('tier_rules').select('*'), db.from('diamond_exceptions').select('*')]);
-  S.rules = a.data || []; S.exc = b.data || [];
+  const [a, b, c] = await Promise.all([db.from('tier_rules').select('*'), db.from('diamond_exceptions').select('*'), db.from('tier_descriptions').select('*')]);
+  S.rules = a.data || []; S.exc = b.data || []; S.tdesc = Object.fromEntries((c.data || []).map(x => [x.tier, x.description || '']));
 }
 async function loadMaster() {
   const { data } = await db.from('diamond_master').select('*');
@@ -256,7 +265,7 @@ function joinModal() { modal(`<div class="space-y-4"><div class="flex justify-be
 /* ---------- APP SHELL ---------- */
 // Everyday tabs on the left; one-time / seasonal setup tabs (flag 1) on the right.
 const TABS = [['open','Open diamonds'],['mine','My bookings'],['dash','Dashboard','view_dashboard'],['sched','Schedule','view_schedule'],['appr','Approvals','approve_members'],['cred','Credits','add_credits'],['slots','Add slots','add_slots'],['users','Users','manage_users'],
-  ['teams','Teams','manage_teams',1],['dm','Diamond Master','manage_diamonds',1],['dia','Age & Time Restrictions','manage_rules',1],['set','Settings','manage_rules',1],['acc','Access control','ADMIN',1],['aud','Audit log','view_audit',1],['plat','Platform','DEV',1]];
+  ['teams','Teams','manage_teams',1],['dm','Diamond Master','manage_diamonds',1],['dia','Booking Restrictions','manage_rules',1],['set','Settings','manage_rules',1],['acc','Access control','ADMIN',1],['aud','Audit log','view_audit',1],['plat','Platform','DEV',1]];
 const showTab = t => t[2] === 'DEV' ? !!S.profile?.is_developer : (!!S.aid && (!t[2] || (t[2] === 'ADMIN' ? isAdmin() : can(t[2]))));
 function showApp() {
   ['auth','onboard'].forEach(x => $(x).classList.add('hidden')); $('app').classList.remove('hidden');
@@ -288,7 +297,7 @@ async function switchAssoc(id) {
 
 /* ---------- OPEN DIAMONDS (rows) ---------- */
 async function loadSlots() {
-  const { data, error } = await db.from('diamonds').select('*').eq('status','Available').gte('date', today())
+  const { data, error } = await db.from('diamonds').select('*').in('status', ['Available', 'On Hold']).gte('date', today())
     .order('date').order('start_time').order('park_name').order('diamond_number');
   if (error) return toast(error.message, 1);
   S.slots = data || [];
@@ -298,26 +307,30 @@ const WD = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 const isoDow = s => { const [y, m, d] = s.split('-'); const g = new Date(y, m - 1, d).getDay(); return g === 0 ? 7 : g; };
 function openFiltered() {
   const f = S.f;
-  return S.slots.filter(s => (!f.park || s.park_name === f.park) && (!f.tier || s.tier === f.tier) && (!f.from || s.date >= f.from) && (!f.to || s.date <= f.to) && f.days.includes(isoDow(s.date)));
+  return S.slots.filter(s => (!f.st || s.status === f.st) && (!f.park || s.park_name === f.park) && f.tiers.includes(s.tier) && (!f.from || s.date >= f.from) && (!f.to || s.date <= f.to) && f.days.includes(isoDow(s.date)));
 }
 function toggleDay(n, on) { S.f.days = on ? [...new Set([...S.f.days, n])] : S.f.days.filter(x => x !== n); drawOpen(); }
+function toggleTier(t, on) { S.f.tiers = on ? [...new Set([...S.f.tiers, t])] : S.f.tiers.filter(x => x !== t); drawOpen(); }
 function drawOpen() {
   const f = S.f, parks = [...new Set(S.slots.map(s => s.park_name))].sort(), list = openFiltered();
-  const act = s => !S.team ? '<span class="text-xs text-amber-700">Join a team</span>'
+  const act = s => s.status === 'On Hold' ? '<span class="tag bg-amber-100 text-amber-900">On hold</span>'
+    : !S.team ? '<span class="text-xs text-amber-700">Join a team</span>'
     : !canUse(S.team, s) ? '<span class="text-xs text-slate-500">Not open to your age group at this time</span>'
     : `<button class="btn" onclick="bookModal('${s.id}')">Book</button>`;
+  const cell = s => `${dn(s)} ${mapLink(s)}${addrLine(s)}${s.status === 'On Hold' ? `<div class="text-xs text-amber-800">On hold${s.hold_comment ? ': ' + esc(s.hold_comment) : ''}</div>` : ''}`;
   $('view').innerHTML = `<div class="card mb-4 space-y-3"><div class="grid md:grid-cols-6 gap-3 items-end">
     ${fld('From', `<input type="date" class="inp" value="${f.from}" min="${today()}" onchange="S.f.from=this.value;S.cal=false;drawOpen()">`)}
     ${fld('To', `<input type="date" class="inp" value="${f.to}" min="${today()}" onchange="S.f.to=this.value;S.cal=false;drawOpen()">`)}
     ${fld('Park', `<select class="inp" onchange="S.f.park=this.value;drawOpen()"><option value="">All parks</option>${parks.map(p => `<option ${p===f.park?'selected':''}>${esc(p)}</option>`).join('')}</select>`)}
-    ${fld('Level', `<select class="inp" onchange="S.f.tier=this.value;drawOpen()"><option value="">All levels</option>${TIERS.map(t => `<option ${t===f.tier?'selected':''}>${t}</option>`).join('')}</select>`)}
+    ${fld('Status', `<select class="inp" onchange="S.f.st=this.value;drawOpen()"><option value="Available" ${f.st==='Available'?'selected':''}>Available</option><option value="On Hold" ${f.st==='On Hold'?'selected':''}>On Hold</option><option value="" ${f.st===''?'selected':''}>Available + On Hold</option></select>`)}
     <button class="btn2" onclick="S.f=newF();drawOpen()">Clear filters</button>
     <div class="flex gap-1"><button class="${!S.cal?'btn':'btn2'} flex-1" onclick="S.cal=false;drawOpen()">List</button><button class="${S.cal?'btn':'btn2'} flex-1" onclick="S.cal=true;drawOpen()">Calendar</button></div></div>
+    <div><div class="text-xs font-semibold text-slate-600 mb-1">Levels</div><div class="grid sm:grid-cols-2 lg:grid-cols-5 gap-2 text-sm">${TIERS.map(t => `<label class="flex gap-2 items-start"><input type="checkbox" class="mt-1" ${f.tiers.includes(t)?'checked':''} onchange="toggleTier('${t}',this.checked)"><span><span class="tag ${TC[t]}">${t}</span>${S.tdesc[t] ? `<span class="block text-xs text-slate-500">${esc(S.tdesc[t])}</span>` : ''}</span></label>`).join('')}</div></div>
     <div class="flex flex-wrap gap-4 text-sm"><span class="font-semibold text-slate-600">Days:</span>${WD.map((n, i) => `<label><input type="checkbox" ${f.days.includes(i+1)?'checked':''} onchange="toggleDay(${i+1},this.checked)"> ${n}</label>`).join('')}</div></div>
     ${S.cal ? calHTML(list) : tbl(['Date','Time','Diamond','Level','Credits',''], list.slice(0,400).map(s => row(
       `<td class="td whitespace-nowrap font-medium">${D(s.date)}</td><td class="td whitespace-nowrap">${T(s.start_time)} - ${T(s.end_time)}</td>
-       <td class="td">${esc(s.park_name)} #${esc(s.diamond_number)} ${mapLink(s)}${addrLine(s)}</td><td class="td">${tier(s)}</td><td class="td">${cost(s)}</td><td class="td text-right">${act(s)}</td>`)),
-      'No open diamonds match these filters.')}`;
+       <td class="td">${cell(s)}</td><td class="td">${tier(s)}</td><td class="td">${s.status === 'On Hold' ? '-' : cost(s)}</td><td class="td text-right">${act(s)}</td>`)),
+      'No diamonds match these filters.')}`;
 }
 function calHTML(L) {
   const y = S.cm.getFullYear(), m = S.cm.getMonth(), first = new Date(y,m,1), n = new Date(y,m+1,0).getDate(), cnt = {};
@@ -333,7 +346,7 @@ function calHTML(L) {
 function bookModal(id) {
   const s = S.slots.find(x => x.id === id); window._s = s;
   modal(`<h3 class="font-bold text-lg mb-2">Book this diamond</h3>
-    <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm mb-3"><b>${esc(s.park_name)} #${esc(s.diamond_number)}</b> ${tier(s)}${addrLine(s)}<div class="mt-1">${D(s.date)}, ${T(s.start_time)} - ${T(s.end_time)}</div></div>
+    <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm mb-3"><b>${dn(s)}</b> ${tier(s)}${addrLine(s)}<div class="mt-1">${D(s.date)}, ${T(s.start_time)} - ${T(s.end_time)}</div></div>
     <p class="text-sm mb-3">Booking for <b>${esc(S.team.name)}</b> (${S.team.tokens_remaining} credits)</p>
     ${evFields('b', {}, S.team.id)}
     <p class="text-sm my-4">Cost: <b id="b-c">${calc(s, 'Practice')}</b> credit(s). Free cancellation until ${S.set.cancel_hours} hours before start.</p>
@@ -354,7 +367,7 @@ V.mine = async () => {
   S.mine = b || []; S.ledger = l || []; drawMine();
 };
 function drawMine() {
-  const f = S.mf, t = today(), key = d => `${d.park_name} #${d.diamond_number}`;
+  const f = S.mf, t = today(), key = d => d.park_name + (d.diamond_number ? ' #' + d.diamond_number : '');
   const dias = [...new Set(S.mine.map(key))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   const L = S.mine.filter(d => ((f.past && d.date < t) || (f.future && d.date >= t)) && (!f.diamond || key(d) === f.diamond) && (!f.status || d.status === f.status));
   $('view').innerHTML = `<h2 class="font-bold text-lg mb-2">${esc(S.team.name)}: bookings</h2>
@@ -364,7 +377,7 @@ function drawMine() {
     <div class="w-48">${fld('Diamond', `<select class="inp" onchange="S.mf.diamond=this.value;drawMine()"><option value="">All diamonds</option>${dias.map(x => `<option ${x===f.diamond?'selected':''}>${esc(x)}</option>`).join('')}</select>`)}</div>
     <div class="w-40">${fld('Status', `<select class="inp" onchange="S.mf.status=this.value;drawMine()"><option value="">All</option>${['Booked','Rainout'].map(x => `<option ${x===f.status?'selected':''}>${x}</option>`).join('')}</select>`)}</div></div>
   ${tbl(['Date','Where','Event type','Cost','Status',''], L.map(d => row(`<td class="td">${D(d.date)}<br><span class="text-xs text-slate-500">${T(d.start_time)} - ${T(d.end_time)}</span></td>
-    <td class="td">${esc(d.park_name)} #${esc(d.diamond_number)} ${tier(d)}</td><td class="td">${evText(d)}</td><td class="td">${d.token_cost ?? 0}</td><td class="td">${stTag(d.status)}</td>
+    <td class="td">${dn(d)} ${tier(d)}</td><td class="td">${evText(d)}</td><td class="td">${d.token_cost ?? 0}</td><td class="td">${stTag(d.status)}</td>
     <td class="td text-right whitespace-nowrap"><button class="btng" onclick="ics('${d.id}')">Add to calendar</button>${d.status==='Booked'&&d.date>=t?` <button class="btnr" onclick="cancelB('${d.id}')">Cancel</button>`:''}</td>`)),
     !f.past && !f.future ? 'Tick Past bookings and/or Future bookings to see them.' : 'No bookings match. Find a slot under Open diamonds.')}
   <h2 class="font-bold text-lg mt-6 mb-2">Credit history <span class="text-sm font-normal text-slate-500">(balance: ${S.team.tokens_remaining})</span></h2>
@@ -378,7 +391,7 @@ function ics(id) {
   const d = S.mine.find(x => x.id === id), f = (dt, t) => dt.replace(/-/g,'') + 'T' + t.slice(0,5).replace(':','') + '00';
   dl(['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Diamond Portal//EN','BEGIN:VEVENT',`UID:${d.id}@diamondportal`,
     `DTSTAMP:${new Date().toISOString().replace(/[-:]|\.\d+/g,'')}`,`DTSTART:${f(d.date,d.start_time)}`,`DTEND:${f(d.date,d.end_time)}`,
-    `SUMMARY:${d.booked_by_team} ${d.booking_reason}${d.opponent_name ? ' vs ' + d.opponent_name : ''}`,`LOCATION:${d.park_name} Diamond ${d.diamond_number}`,'END:VEVENT','END:VCALENDAR'].join('\r\n'), 'booking.ics', 'text/calendar');
+    `SUMMARY:${d.booked_by_team} ${d.booking_reason}${d.opponent_name ? ' vs ' + d.opponent_name : ''}`,`LOCATION:${d.park_name}${d.diamond_number ? ' Diamond ' + d.diamond_number : ''}`,'END:VEVENT','END:VCALENDAR'].join('\r\n'), 'booking.ics', 'text/calendar');
 }
 
 /* ---------- DASHBOARD (availability) ---------- */
@@ -386,28 +399,44 @@ V.dash = async () => {
   const [{ data: all }, { data: tm }] = await Promise.all([db.from('diamonds').select('*').gte('date', today()).order('date').order('start_time'), db.from('teams').select('*')]);
   if (can('approve_members')) await pending(); tabs();
   S.dall = all || [];
-  const op = S.dall.filter(s => s.status === 'Available'), d7 = ymd(addDays(7)), d30 = ymd(addDays(30));
+  const op = S.dall.filter(s => s.status === 'Available'), holds = S.dall.filter(s => s.status === 'On Hold'), d7 = ymd(addDays(7)), d30 = ymd(addDays(30));
   const byT = Object.fromEntries(TIERS.map(t => [t, op.filter(s => s.tier === t && s.date <= d30).length]));
   const g = {};
-  S.dall.forEach(s => { const k = s.park_name + '|' + s.diamond_number, o = g[k] || (g[k] = { park: s.park_name, num: s.diamond_number, tier: s.tier, open: 0, tot: 0, next: null });
-    o.tot++; if (s.status === 'Available') { o.open++; if (!o.next) o.next = s; } });
-  S.dg = Object.values(g).sort((a,b) => (a.park + ' ' + a.num).localeCompare(b.park + ' ' + b.num, undefined, {numeric:true}));
+  S.dall.forEach(s => { const k = s.park_name + '|' + s.diamond_number, o = g[k] || (g[k] = { park_name: s.park_name, diamond_number: s.diamond_number, tier: s.tier, open: 0, hold: 0, tot: 0, next: null });
+    o.tot++; if (s.status === 'Available') { o.open++; if (!o.next) o.next = s; } if (s.status === 'On Hold') o.hold++; });
+  S.dg = Object.values(g).sort((a, b) => (a.park_name + ' ' + a.diamond_number).localeCompare(b.park_name + ' ' + b.diamond_number, undefined, { numeric: true }));
   const days = [...Array(14)].map((_, i) => { const k = ymd(addDays(i)); return [k, op.filter(s => s.date === k).length]; }), mx = Math.max(1, ...days.map(x => x[1]));
   const low = (tm || []).filter(t => t.active && t.tokens_remaining <= 2).length;
   const stat = (n, l, c) => `<div class="card"><div class="text-3xl font-bold ${c||''}">${n}</div><div class="text-sm text-slate-600">${l}</div></div>`;
-  $('view').innerHTML = `<div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">${stat(op.filter(s => s.date <= d7).length,'open slots, next 7 days')}${stat(op.filter(s => s.date <= d30).length,'open slots, next 30 days')}
+  const holdRow = s => { const n = s.held_at ? Math.floor((Date.now() - new Date(s.held_at)) / 864e5) : 0, soon = s.date <= d7;
+    return row(`<td class="td whitespace-nowrap ${soon ? 'bg-amber-50' : ''}">${D(s.date)}<br><span class="text-xs text-slate-500">${T(s.start_time)} - ${T(s.end_time)}</span>${soon ? ' <span class="tag bg-amber-400 text-slate-900">soon</span>' : ''}</td>
+      <td class="td">${dn(s)}</td><td class="td">${tier(s)}</td><td class="td">${s.hold_comment ? esc(s.hold_comment) : '<span class="text-slate-400">no comment</span>'}</td>
+      <td class="td text-xs">${esc(s.held_by_name || '')}<br><span class="text-slate-500">${s.held_at ? 'held ' + (n ? n + ' day(s)' : 'today') : ''}</span></td>
+      <td class="td text-right"><div class="grid grid-cols-2 gap-1 w-40 ml-auto">${can('assign_slots') ? sbtn('Assign', `assignModal('${s.id}')`, 'btn') : ''}${can('hold_slots') ? sbtn('Release hold', `releaseHold('${s.id}')`) : ''}</div></td>`); };
+  $('view').innerHTML = `<div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-3">${stat(op.filter(s => s.date <= d7).length,'open slots, next 7 days')}${stat(op.filter(s => s.date <= d30).length,'open slots, next 30 days')}
+    ${stat(holds.length,'slots on hold', holds.length ? 'text-amber-600' : '')}
     ${can('approve_members') ? stat(S.pend,'approvals waiting',S.pend?'text-amber-600':'') : ''}${can('add_credits') ? stat(low,'teams with 2 or fewer credits',low?'text-amber-600':'') : ''}</div>
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">${TIERS.map(t => `<div class="card !py-3"><span class="tag ${TC[t]}">${t}</span> <b class="text-xl ml-2">${byT[t]}</b><div class="text-xs text-slate-500">open, next 30 days</div></div>`).join('')}</div>
-    <div class="card mb-5"><h3 class="font-bold mb-3">Open slots per day, next 14 days</h3><div class="grid grid-cols-7 gap-2">${days.map(([k, n]) => `<div class="text-center text-xs"><div class="h-16 flex items-end justify-center"><div class="w-6 rounded-t bg-emerald-700" style="height:${Math.max(n?6:0, 100*n/mx)}%"></div></div><b>${n}</b><div class="text-slate-500">${D(k).replace(/,? \d{4}/,'')}</div></div>`).join('')}</div></div>
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-5">${TIERS.map(t => `<div class="card !py-3"><span class="tag ${TC[t]}">${t}</span> <b class="text-xl ml-2">${byT[t]}</b><div class="text-xs text-slate-500">open, next 30 days</div></div>`).join('')}</div>
+    <div class="card !p-0 overflow-x-auto mb-5"><div class="p-4 pb-2"><h3 class="font-bold">On hold <span class="tag bg-amber-100 text-amber-900">${holds.length}</span></h3><p class="text-xs text-slate-500">Holds do not expire on their own. Assign them once confirmed, or release them so other teams can book. Holds in the next 7 days are highlighted.</p></div>
+    <table class="w-full text-sm"><thead><tr><th class="th">When</th><th class="th">Diamond</th><th class="th">Level</th><th class="th">Comment</th><th class="th">Held by</th><th class="th"></th></tr></thead><tbody>
+    ${holds.map(holdRow).join('') || '<tr><td colspan="6" class="td text-center text-slate-500 py-5">Nothing is on hold.</td></tr>'}</tbody></table></div>
+    <div class="card mb-5"><h3 class="font-bold mb-1">Open slots per day, next 14 days</h3><p class="text-xs text-slate-500 mb-3">Click a day to see its open slots.</p><div class="grid grid-cols-7 gap-2">${days.map(([k, n]) => `<button class="text-center text-xs rounded-lg p-1 hover:bg-emerald-50" onclick="dayDrill('${k}')"><div class="h-16 flex items-end justify-center"><div class="w-6 rounded-t bg-emerald-700" style="height:${Math.max(n?6:0, 100*n/mx)}%"></div></div><b>${n}</b><div class="text-slate-500">${D(k).replace(/,? \d{4}/,'')}</div></button>`).join('')}</div></div>
     <h3 class="font-bold mb-2">Availability by diamond <span class="text-sm font-normal text-slate-500">(click a diamond for its future availability)</span></h3>
-    <div class="card !p-0 overflow-x-auto"><table class="w-full text-sm"><thead><tr><th class="th">Diamond</th><th class="th">Level</th><th class="th">Open slots ahead</th><th class="th">Next open</th></tr></thead><tbody>
-    ${S.dg.map((x, i) => `<tr class="border-t border-slate-100 cursor-pointer hover:bg-emerald-50" onclick="drill(${i})"><td class="td font-medium">${esc(x.park)} #${esc(x.num)}</td><td class="td">${tier(x)}</td><td class="td"><b>${x.open}</b> <span class="text-slate-500">of ${x.tot}</span></td><td class="td">${x.next ? D(x.next.date) + ' ' + T(x.next.start_time) : '<span class="text-red-700">None open</span>'}</td></tr>`).join('') || '<tr><td colspan="4" class="td text-center text-slate-500 py-6">No upcoming slots. Add some under Add slots.</td></tr>'}</tbody></table></div>`;
+    <div class="card !p-0 overflow-x-auto"><table class="w-full text-sm"><thead><tr><th class="th">Diamond</th><th class="th">Level</th><th class="th">Open slots ahead</th><th class="th">On hold</th><th class="th">Next open</th></tr></thead><tbody>
+    ${S.dg.map((x, i) => `<tr class="border-t border-slate-100 cursor-pointer hover:bg-emerald-50" onclick="drill(${i})"><td class="td font-medium">${dn(x)}</td><td class="td">${tier(x)}</td><td class="td"><b>${x.open}</b> <span class="text-slate-500">of ${x.tot}</span></td><td class="td">${x.hold || '-'}</td><td class="td">${x.next ? D(x.next.date) + ' ' + T(x.next.start_time) : '<span class="text-red-700">None open</span>'}</td></tr>`).join('') || '<tr><td colspan="5" class="td text-center text-slate-500 py-6">No upcoming slots. Add some under Add slots.</td></tr>'}</tbody></table></div>`;
 };
+function dayDrill(k) {
+  const L = S.dall.filter(s => s.date === k && s.status === 'Available');
+  modal(`<div class="flex justify-between mb-2"><h3 class="font-bold text-lg">Open slots: ${D(k)}</h3><button class="btn2" onclick="closeModal()">Close</button></div>
+    <p class="text-sm text-slate-600 mb-2">${L.length} open slot(s)</p><div class="max-h-96 overflow-y-auto"><table class="w-full text-sm">
+    ${L.map(s => row(`<td class="py-1 pr-3 whitespace-nowrap">${T(s.start_time)} - ${T(s.end_time)}</td><td class="py-1 pr-3">${dn(s)}${addrLine(s)}</td><td class="py-1">${tier(s)}</td>`)).join('') || '<tr><td class="text-slate-500 py-2">Nothing open this day.</td></tr>'}</table></div>`);
+}
 function drill(i) {
-  const g = S.dg[i], L = S.dall.filter(s => s.park_name === g.park && s.diamond_number === g.num);
-  modal(`<div class="flex justify-between mb-2"><h3 class="font-bold text-lg">${esc(g.park)} #${esc(g.num)} ${tier(g)}</h3><button class="btn2" onclick="closeModal()">Close</button></div>
-    <p class="text-sm text-slate-600 mb-2">${g.open} open of ${g.tot} upcoming slots</p>
-    <div class="max-h-96 overflow-y-auto"><table class="w-full text-sm">${L.map(s => row(`<td class="py-1 pr-2 whitespace-nowrap">${D(s.date)}</td><td class="py-1 pr-2 whitespace-nowrap">${T(s.start_time)} - ${T(s.end_time)}</td><td class="py-1">${s.status === 'Available' ? '<span class="text-emerald-700 font-semibold">Open</span>' : stTag(s.status) + ' ' + esc(s.booked_by_team || '')}</td>`)).join('')}</table></div>`);
+  const g = S.dg[i], L = S.dall.filter(s => s.park_name === g.park_name && s.diamond_number === g.diamond_number);
+  modal(`<div class="flex justify-between mb-2"><h3 class="font-bold text-lg">${dn(g)} ${tier(g)}</h3><button class="btn2" onclick="closeModal()">Close</button></div>
+    <p class="text-sm text-slate-600 mb-2">${g.open} open${g.hold ? `, ${g.hold} on hold` : ''}, of ${g.tot} upcoming slots</p>
+    <div class="max-h-96 overflow-y-auto"><table class="w-full text-sm">${L.map(s => row(`<td class="py-1 pr-2 whitespace-nowrap">${D(s.date)}</td><td class="py-1 pr-2 whitespace-nowrap">${T(s.start_time)} - ${T(s.end_time)}</td>
+      <td class="py-1">${s.status === 'Available' ? '<span class="text-emerald-700 font-semibold">Open</span>' : stTag(s.status) + ' ' + esc(s.booked_by_team || s.hold_comment || '')}</td>`)).join('')}</table></div>`);
 }
 
 /* ---------- APPROVALS ---------- */
@@ -428,39 +457,68 @@ V.sched = async () => {
   S.all = data || []; drawSched();
 };
 const schedList = () => S.all.filter(s => (!S.sf.status || s.status === S.sf.status) && (!S.sf.park || s.park_name === S.sf.park) && (!S.sf.from || s.date >= S.sf.from));
-const byCell = s => !s.booked_by_team ? '-' : `<b>${esc(s.booked_by_name || '(not recorded)')}</b>
+const sbtn = (label, fn, cls = 'btn2') => `<button class="${cls} !py-0.5 !px-2 !text-xs leading-tight" onclick="${fn}">${label}</button>`;
+const when = ts => ts ? new Date(ts).toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' }) : '';
+const byCell = s => s.status === 'On Hold' ? `<b>${esc(s.held_by_name || '')}</b><div class="text-xs text-slate-400">${when(s.held_at)}</div>`
+  : !s.booked_by_team ? '-' : `<b>${esc(s.booked_by_name || '(not recorded)')}</b>
   <div class="text-xs text-slate-500">${esc(String(s.booked_by_name || '').startsWith('Assigned') ? '' : (s.coach_email || ''))}${s.booked_by_phone ? ' &middot; ' + esc(s.booked_by_phone) : ''}</div>
-  ${s.booked_at ? `<div class="text-xs text-slate-400">${new Date(s.booked_at).toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' })}</div>` : ''}`;
+  ${s.booked_at ? `<div class="text-xs text-slate-400">${when(s.booked_at)}</div>` : ''}`;
 function drawSched() {
   const f = S.sf, parks = [...new Set(S.all.map(s => s.park_name))].sort(), L = schedList();
   const acts = s => {
-    let a = '';
-    if (s.status === 'Available' && can('assign_slots')) a += `<button class="btn" onclick="assignModal('${s.id}')">Assign</button> `;
-    if (can('add_slots') || can('assign_slots')) a += `<button class="btn2 !py-1 !text-xs" onclick="editSlot('${s.id}')">Edit</button> `;
-    if (s.status === 'Booked' && can('release_slots')) a += `<button class="btnr" onclick="rel('${s.id}','rainout')">Rainout + refund</button> <button class="btn2 !py-1 !text-xs" onclick="rel('${s.id}','cancel')">Cancel + reopen</button>`;
-    if (s.status !== 'Booked' && can('release_slots')) a += `<button class="btnr" onclick="delSlot('${s.id}')">Delete</button>`;
-    return a;
+    const b = [sbtn('Details', `detailsModal('${s.id}')`)];
+    if (can('add_slots') || can('assign_slots') || (s.status === 'On Hold' && can('hold_slots'))) b.push(sbtn('Edit', `editSlot('${s.id}')`));
+    if (s.status === 'Available' && can('hold_slots')) b.push(sbtn('Hold', `holdModal('${s.id}')`));
+    if (s.status === 'On Hold' && can('hold_slots')) b.push(sbtn('Release hold', `releaseHold('${s.id}')`));
+    if ((s.status === 'Available' || s.status === 'On Hold') && can('assign_slots')) b.push(sbtn('Assign', `assignModal('${s.id}')`, 'btn'));
+    if (s.status === 'Booked' && can('release_slots')) b.push(sbtn('Rainout + refund', `rel('${s.id}','rainout')`, 'btnr'), sbtn('Cancel + reopen', `rel('${s.id}','cancel')`));
+    if (s.status !== 'Booked' && can('release_slots')) b.push(sbtn('Delete', `delSlot('${s.id}')`, 'btnr'));
+    return `<div class="grid grid-cols-2 gap-1 w-52 ml-auto">${b.join('')}</div>`;
   };
   $('view').innerHTML = `<div class="card mb-4 text-sm"><b>What the buttons do</b><ul class="mt-2 space-y-1 text-slate-700">
-    <li><b>Assign</b>: puts an open slot on a team of your choice, with the event type and opponent. You choose whether to charge credits. Age-group rules and booking limits are ignored.</li>
-    <li><b>Edit</b>: changes a slot's date, time or level, and (for booked slots) the event type, game number and opponent. Credits already charged are not recalculated.</li>
+    <li><b>Details</b>: shows everything recorded about the slot: diamond and address, level, team and age group, event type, opponent, who booked it and when, credits charged and any hold.</li>
+    <li><b>Edit</b>: changes a slot's date, time or level, a hold's comment, and (for booked slots) the event type, game number and opponent. Credits already charged are not recalculated.</li>
+    <li><b>Hold</b> / <b>Release hold</b>: reserves an open slot for something unconfirmed (for example, a permit you hold), with an optional comment. Held slots cannot be booked by coaches. Release returns the slot to Available.</li>
+    <li><b>Assign</b>: puts an open or held slot on a team, with the event type and opponent. You choose whether to charge credits. Age-group rules and booking limits are ignored.</li>
     <li><b>Rainout + refund</b>: weather cancelled the booked game or practice. The team gets its credits back and the slot stays on the schedule marked Rainout (it is not reopened).</li>
-    <li><b>Cancel + reopen</b>: removes the booking, refunds the credits and puts the slot back as Open so another team can book it.</li>
-    <li><b>Delete</b>: permanently removes a slot that nobody has booked (for example a permit you no longer hold).</li></ul></div>
+    <li><b>Cancel + reopen</b>: removes the booking, refunds the credits and puts the slot back as Available.</li>
+    <li><b>Delete</b>: permanently removes a slot that nobody has booked.</li></ul></div>
   <div class="card !p-3 grid grid-cols-2 md:grid-cols-5 gap-3 items-end mb-4">
-    ${fld('Status', `<select class="inp" onchange="S.sf.status=this.value;drawSched()"><option value="">All</option>${['Available','Booked','Rainout'].map(x => `<option ${x===f.status?'selected':''}>${x}</option>`).join('')}</select>`)}
+    ${fld('Status', `<select class="inp" onchange="S.sf.status=this.value;drawSched()"><option value="">All</option>${['Available','On Hold','Booked','Rainout'].map(x => `<option ${x===f.status?'selected':''}>${x}</option>`).join('')}</select>`)}
     ${fld('Park', `<select class="inp" onchange="S.sf.park=this.value;drawSched()"><option value="">All</option>${parks.map(p => `<option ${p===f.park?'selected':''}>${esc(p)}</option>`).join('')}</select>`)}
     ${fld('From date', `<input type="date" class="inp" value="${f.from}" onchange="S.sf.from=this.value;drawSched()">`)}
     <button class="btn2" onclick="S.sf={status:'',park:'',from:''};drawSched()">Clear</button><button class="btn2" onclick="exportCSV()">Export CSV (${L.length})</button></div>
   ${tbl(['When','Diamond','Level','Status','Team','Event type','Booked by','Actions'], L.slice(0,300).map(s => row(`<td class="td whitespace-nowrap">${D(s.date)}<br><span class="text-xs text-slate-500">${T(s.start_time)} - ${T(s.end_time)}</span></td>
-    <td class="td">${esc(s.park_name)} #${esc(s.diamond_number)}</td><td class="td">${tier(s)}</td><td class="td">${stTag(s.status)}</td>
-    <td class="td">${s.booked_by_team ? `<b>${esc(s.booked_by_team)}</b>${s.team?.division ? `<div class="text-xs text-slate-500">Age group: ${esc(s.team.division)}</div>` : ''}` : '-'}</td>
-    <td class="td">${s.booking_reason ? evText(s) : '-'}</td><td class="td">${byCell(s)}</td><td class="td text-right"><div class="flex flex-wrap gap-1 justify-end">${acts(s)}</div></td>`)), 'No slots match.')}
+    <td class="td">${dn(s)}</td><td class="td">${tier(s)}</td><td class="td">${stTag(s.status)}</td>
+    <td class="td">${s.booked_by_team ? `<b>${esc(s.booked_by_team)}</b>${s.team?.division ? `<div class="text-xs text-slate-500">Age group: ${esc(s.team.division)}</div>` : ''}` : s.status === 'On Hold' ? `<div class="text-xs text-amber-800">${esc(s.hold_comment || 'On hold')}</div>` : '-'}</td>
+    <td class="td">${s.booking_reason ? evText(s) : '-'}</td><td class="td">${byCell(s)}</td><td class="td">${acts(s)}</td>`)), 'No slots match.')}
   ${L.length > 300 ? `<p class="p-3 text-xs text-slate-500">Showing the first 300 of ${L.length}. Use filters to narrow down.</p>` : ''}`;
 }
+function detailsModal(id) {
+  const s = S.all.find(x => x.id === id), m = dmOf(s), a = addrOf(m), desc = S.tdesc[s.tier];
+  const kv = (k, v) => v ? `<div class="flex gap-3 py-1 border-b border-slate-100"><div class="w-40 shrink-0 text-xs font-semibold text-slate-500">${k}</div><div class="text-sm">${v}</div></div>` : '';
+  const dead = s.status === 'Booked' ? new Date(new Date(`${s.date}T${s.start_time}`) - (+S.set.cancel_hours || 0) * 36e5) : null;
+  modal(`<div class="flex justify-between items-center mb-2"><h3 class="font-bold text-lg">Slot details</h3><button class="btn2" onclick="closeModal()">Close</button></div><div class="mb-3">${stTag(s.status)} ${tier(s)}</div>
+    ${kv('Diamond', dn(s))}${kv('Address', esc(a))}${kv('Date', D(s.date))}${kv('Time', `${T(s.start_time)} - ${T(s.end_time)}`)}
+    ${kv('Level', tier(s) + (desc ? ` <span class="text-xs text-slate-500">${esc(desc)}</span>` : ''))}${kv('Credit cost at this level', String(cost(s)))}${kv('Diamond notes', esc(m?.notes || ''))}
+    ${s.status === 'On Hold' ? kv('Hold comment', esc(s.hold_comment || '(none)')) + kv('Held by', esc(s.held_by_name || '')) + kv('Held on', when(s.held_at)) : ''}
+    ${s.booked_by_team ? kv('Team', esc(s.booked_by_team)) + kv('Age group', esc(s.team?.division || '')) + kv('Event type', esc(s.booking_reason)) + kv('Game #', esc(s.game_number || '')) + kv('Opponent', esc(s.opponent_name || ''))
+      + kv('Credits charged', String(s.token_cost ?? 0)) + kv(String(s.booked_by_name || '').startsWith('Assigned') ? 'Assigned by' : 'Booked by', esc(String(s.booked_by_name || '(not recorded)').replace(/^Assigned by /, '')))
+      + kv('Email', esc(String(s.booked_by_name || '').startsWith('Assigned') ? '' : (s.coach_email || ''))) + kv('Phone', esc(s.booked_by_phone || '')) + kv('Booked on', when(s.booked_at))
+      + (s.status === 'Booked' ? kv('Free cancellation until', when(dead) + ' (your local time)') : '') : ''}
+    ${kv('Slot added', when(s.created_at))}`);
+}
+function holdModal(id) {
+  const s = S.all.find(x => x.id === id);
+  modal(`<h3 class="font-bold text-lg mb-2">Put this slot on hold</h3><div class="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm mb-3"><b>${dn(s)}</b> ${tier(s)}<br>${D(s.date)}, ${T(s.start_time)} - ${T(s.end_time)}</div>
+    ${fld('Comment (optional)', '<textarea id="h-c" class="inp" rows="3" placeholder="Why is it being held? Who is it for?"></textarea>')}
+    <div class="flex gap-2 mt-4"><button class="btn2 w-1/2" onclick="closeModal()">Cancel</button><button class="btn w-1/2" onclick="doHold('${id}')">Place hold</button></div>`);
+}
+async function doHold(id) { if (await rpc('hold_slot', { p_id: id, p_comment: $('h-c').value })) { closeModal(); go(S.tab); } }
+async function releaseHold(id) { if (confirm('Release this hold? The slot becomes available for coaches to book.') && await rpc('release_hold', { p_id: id })) go(S.tab); }
 function assignModal(id) {
-  const s = S.all.find(x => x.id === id); window._s = s;
-  modal(`<h3 class="font-bold text-lg mb-2">Assign this slot to a team</h3><div class="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm mb-3"><b>${esc(s.park_name)} #${esc(s.diamond_number)}</b> ${tier(s)}<br>${D(s.date)}, ${T(s.start_time)} - ${T(s.end_time)}</div>
+  const s = S.all.find(x => x.id === id) || S.dall.find(x => x.id === id); window._s = s;
+  modal(`<h3 class="font-bold text-lg mb-2">Assign this slot to a team</h3><div class="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm mb-3"><b>${dn(s)}</b> ${tier(s)}<br>${D(s.date)}, ${T(s.start_time)} - ${T(s.end_time)}${s.hold_comment ? `<div class="text-xs text-amber-800 mt-1">Hold: ${esc(s.hold_comment)}</div>` : ''}</div>
     <div class="space-y-3">${fld('Team', `<select id="as-t" class="inp">${S.teams.filter(t => t.active).map(t => `<option value="${t.id}">${esc(t.name)} (${t.tokens_remaining} credits)</option>`).join('')}</select>`)}
     <div>${evFields('as', {}, null)}</div>
     <label class="text-sm flex gap-2"><input type="checkbox" id="as-ch" checked> Charge <b id="as-c">${calc(s, 'Practice')}</b> credit(s) to the team</label></div>
@@ -468,13 +526,14 @@ function assignModal(id) {
 }
 async function doAssign(id) {
   const e = evRead('as'); if (!e) return;
-  if (await rpc('assign_diamond', { p_diamond_id: id, p_team_id: $('as-t').value, p_reason: e.r, p_charge: $('as-ch').checked, p_game: e.g, p_opp_name: e.n, p_opp_team: e.t })) { closeModal(); V.sched(); }
+  if (await rpc('assign_diamond', { p_diamond_id: id, p_team_id: $('as-t').value, p_reason: e.r, p_charge: $('as-ch').checked, p_game: e.g, p_opp_name: e.n, p_opp_team: e.t })) { closeModal(); go(S.tab); }
 }
 function editSlot(id) {
-  const s = S.all.find(x => x.id === id), ts = can('add_slots'), booked = s.status === 'Booked' && can('assign_slots'); window._s = s;
-  modal(`<h3 class="font-bold text-lg mb-1">Edit slot</h3><p class="text-xs text-slate-500 mb-3">${esc(s.park_name)} #${esc(s.diamond_number)}${s.booked_by_team ? ' &middot; ' + esc(s.booked_by_team) : ''}. Credits already charged are not recalculated.</p>
+  const s = S.all.find(x => x.id === id), ts = can('add_slots'), booked = s.status === 'Booked' && can('assign_slots'), held = s.status === 'On Hold' && can('hold_slots'); window._s = s;
+  modal(`<h3 class="font-bold text-lg mb-1">Edit slot</h3><p class="text-xs text-slate-500 mb-3">${dn(s)}${s.booked_by_team ? ' &middot; ' + esc(s.booked_by_team) : ''}. Credits already charged are not recalculated.</p>
     <div class="grid grid-cols-2 gap-3">${fld('Date', `<input id="ed-date" type="date" class="inp" value="${s.date}" ${ts ? '' : 'disabled'}>`)}${fld('Level', tierSel('ed-tier', s.tier).replace('<select', ts ? '<select' : '<select disabled'))}
     ${fld('Start time', `<input id="ed-s" type="time" class="inp" value="${s.start_time.slice(0,5)}" ${ts ? '' : 'disabled'}>`)}${fld('End time', `<input id="ed-e" type="time" class="inp" value="${s.end_time.slice(0,5)}" ${ts ? '' : 'disabled'}>`)}</div>
+    ${held ? `<div class="mt-3">${fld('Hold comment', `<textarea id="ed-hc" class="inp" rows="2">${esc(s.hold_comment || '')}</textarea>`)}</div>` : ''}
     ${booked ? `<div class="mt-3">${evFields('ed', { reason: s.booking_reason, game: s.game_number, oppName: s.opponent_name, oppTeam: s.opponent_team_id }, s.booked_by_team_id)}</div>` : ''}
     <div class="flex gap-2 mt-4"><button class="btn2 w-1/2" onclick="closeModal()">Cancel</button><button class="btn w-1/2" onclick="doEdit('${id}')">Save changes</button></div>`);
 }
@@ -482,7 +541,7 @@ async function doEdit(id) {
   const s = S.all.find(x => x.id === id), booked = s.status === 'Booked' && can('assign_slots');
   const e = booked ? evRead('ed') : { r: s.booking_reason, g: s.game_number, n: s.opponent_name, t: s.opponent_team_id };
   if (!e) return;
-  if (await rpc('edit_slot', { p_id: id, p_date: $('ed-date').value, p_start: $('ed-s').value, p_end: $('ed-e').value, p_tier: $('ed-tier').value, p_reason: e.r, p_game: e.g, p_opp_name: e.n, p_opp_team: e.t })) { closeModal(); V.sched(); }
+  if (await rpc('edit_slot', { p_id: id, p_date: $('ed-date').value, p_start: $('ed-s').value, p_end: $('ed-e').value, p_tier: $('ed-tier').value, p_reason: e.r, p_game: e.g, p_opp_name: e.n, p_opp_team: e.t, p_hold_comment: $('ed-hc') ? $('ed-hc').value : null })) { closeModal(); V.sched(); }
 }
 async function rel(id, mode) {
   if (!confirm(mode === 'rainout' ? 'Mark as rainout and refund the team?' : 'Cancel this booking, refund the team and reopen the slot?')) return;
@@ -495,8 +554,8 @@ async function delSlot(id) {
   audit('Slot deleted', id); V.sched();
 }
 function exportCSV() {
-  const h = ['park_name','diamond_number','date','start_time','end_time','level','status','team','age_group','event_type','game_number','opponent','booked_by','booked_by_email','booked_by_phone'];
-  const line = s => [s.park_name, s.diamond_number, s.date, s.start_time, s.end_time, s.tier, s.status, s.booked_by_team, s.team?.division, s.booking_reason, s.game_number, s.opponent_name, s.booked_by_name, s.coach_email, s.booked_by_phone].map(csvQ).join(',');
+  const h = ['park_name','diamond_number','date','start_time','end_time','level','status','hold_comment','team','age_group','event_type','game_number','opponent','booked_by','booked_by_email','booked_by_phone'];
+  const line = s => [s.park_name, s.diamond_number, s.date, s.start_time, s.end_time, s.tier, s.status, s.hold_comment, s.booked_by_team, s.team?.division, s.booking_reason, s.game_number, s.opponent_name, s.booked_by_name, s.coach_email, s.booked_by_phone].map(csvQ).join(',');
   dl([h.join(','), ...schedList().map(line)].join('\n'), 'diamond_schedule.csv', 'text/csv');
 }
 
@@ -506,11 +565,10 @@ V.slots = async () => {
   await loadMaster();
   const act = S.dm.filter(x => x.active), wd = WD;
   $('view').innerHTML = `<div class="card mb-5"><h2 class="font-bold text-lg mb-1">Add slots manually</h2>
-    <p class="text-xs text-slate-500 mb-3">Diamonds and their levels come from the Diamond Master tab. Choose a date range and the weekdays the diamond is available. For a single day, use the same From and To date.</p>
-    ${act.length ? `<div class="grid grid-cols-2 md:grid-cols-4 gap-3">${fld('Diamond', `<select id="g-d" class="inp">${act.map(x => `<option value="${x.id}">${esc(x.park_name)} #${esc(x.diamond_number)} (${x.tier})</option>`).join('')}</select>`)}
+    <p class="text-xs text-slate-500 mb-3">Diamonds and their levels come from the Diamond Master tab. Pick a date range: a slot is created on every day in the range. For a single day, use the same From and To date.</p>
+    ${act.length ? `<div class="grid grid-cols-2 md:grid-cols-4 gap-3">${fld('Diamond', `<select id="g-d" class="inp">${act.map(x => `<option value="${x.id}">${dn(x)} (${x.tier})</option>`).join('')}</select>`)}
       ${fld('From date', '<input id="g-from" type="date" class="inp">')}${fld('To date', '<input id="g-to" type="date" class="inp">')}<div></div>
       ${fld('Start time', '<input id="g-s" type="time" value="18:30" class="inp">')}${fld('End time', '<input id="g-e" type="time" value="20:30" class="inp">')}</div>
-    <div class="flex flex-wrap gap-3 mt-3 text-sm">${wd.map((n, i) => `<label><input type="checkbox" class="g-wd" value="${i+1}" checked> ${n}</label>`).join('')}</div>
     <button class="btn mt-3" onclick="genSlots()">Create slots</button>` : '<p class="text-sm text-amber-700">Add your diamonds under Diamond Master first.</p>'}</div>
   <div class="card"><div class="flex flex-wrap justify-between gap-3 mb-3"><div><h2 class="font-bold text-lg">Add slots from a CSV</h2>
     <p class="text-sm text-slate-600">Columns: <code class="bg-slate-100 px-1 rounded">park_name, diamond_number, date, start_time, end_time, tier</code>. Each diamond must exist in Diamond Master. Tier is optional (blank uses the diamond's level). Dates as YYYY-MM-DD, times as HH:MM (24 hour). Duplicates are skipped.</p></div>
@@ -518,9 +576,9 @@ V.slots = async () => {
     <input type="file" accept=".csv" onchange="readSlotCSV(event)" class="text-sm"><div id="csv-out" class="mt-4"></div></div>`;
 };
 async function genSlots() {
-  const x = S.dm.find(m => m.id === $('g-d').value), wds = [...document.querySelectorAll('.g-wd:checked')].map(v => +v.value);
+  const x = S.dm.find(m => m.id === $('g-d').value), wds = [1, 2, 3, 4, 5, 6, 7];
   const a = { p_park: x.park_name, p_diamond: x.diamond_number, p_tier: x.tier, p_from: $('g-from').value, p_to: $('g-to').value, p_weekdays: wds, p_start: $('g-s').value, p_end: $('g-e').value };
-  if (!a.p_from || !a.p_to || !wds.length || a.p_end <= a.p_start) return toast('Fill in the dates, weekdays and a valid time range.', 1);
+  if (!a.p_from || !a.p_to || a.p_end <= a.p_start) return toast('Fill in the dates and a valid time range.', 1);
   await rpc('generate_slots', a);
 }
 function sampleCSV() {
@@ -542,7 +600,7 @@ function readSlotCSV(e) {
     });
     const ok = csvRows.filter(x => !x.bad.length).length;
     $('csv-out').innerHTML = `<p class="text-sm mb-2"><b>${ok}</b> valid rows, <b class="${csvRows.length-ok?'text-red-700':''}">${csvRows.length-ok}</b> with problems.</p>
-      <div class="max-h-72 overflow-auto border border-slate-200 rounded-lg mb-3"><table class="w-full text-xs"><tbody>${csvRows.map(x => row(`<td class="td">Row ${x.n}</td><td class="td">${esc(x.r.park_name)} #${esc(x.r.diamond_number)}</td><td class="td">${esc(x.r.date)} ${esc(x.r.start_time)}-${esc(x.r.end_time)}</td><td class="td">${esc(x.r.tier || '')}</td><td class="td text-red-700">${x.bad.join(', ')}</td>`)).join('')}</tbody></table></div>
+      <div class="max-h-72 overflow-auto border border-slate-200 rounded-lg mb-3"><table class="w-full text-xs"><tbody>${csvRows.map(x => row(`<td class="td">Row ${x.n}</td><td class="td">${dn(x.r)}</td><td class="td">${esc(x.r.date)} ${esc(x.r.start_time)}-${esc(x.r.end_time)}</td><td class="td">${esc(x.r.tier || '')}</td><td class="td text-red-700">${x.bad.join(', ')}</td>`)).join('')}</tbody></table></div>
       <button class="btn" ${ok?'':'disabled'} onclick="doImport()">Import ${ok} valid row(s)</button>`;
   });
 }
@@ -679,16 +737,17 @@ V.dia = async () => {
   S.divs = [...new Set(S.teams.map(t => t.division).filter(Boolean))].sort();
   const r = (d, t) => S.rules.find(x => x.division === d && x.tier === t) || { allowed: true, allowed_late: true }, late = (S.set.late_start || '20:30').slice(0, 5);
   const who = x => x.team_id ? `Team: ${esc(S.teams.find(t => t.id === x.team_id)?.name || '?')}` : `Age group: ${esc(x.division)}`;
-  $('view').innerHTML = `<div class="card mb-5"><h2 class="font-bold text-lg mb-1">Late-start time</h2><p class="text-xs text-slate-500 mb-3">Slots that start at or after this time use the "Late" tick boxes below. Everything earlier uses "Regular".</p>
+  $('view').innerHTML = `<div class="card mb-5"><h2 class="font-bold text-lg mb-1">Diamond levels: how each is used</h2><p class="text-xs text-slate-500 mb-3">Describe each level in plain words. Coaches see this beside the level on Open diamonds. For example: "Suitable for team practice, but not for games".</p>${TIERS.map((t, i) => `<div class="grid md:grid-cols-5 gap-2 items-start mb-2"><div class="pt-2"><span class="tag ${TC[t]}">${t}</span></div><textarea class="inp md:col-span-4" rows="2" onchange="saveDesc(${i},this.value)">${esc(S.tdesc[t] || '')}</textarea></div>`).join('')}</div>
+  <div class="card mb-5"><h2 class="font-bold text-lg mb-1">Late-start time</h2><p class="text-xs text-slate-500 mb-3">Slots that start at or after this time use the "Late" tick boxes below. Everything earlier uses "Regular".</p>
     <div class="flex items-end gap-3"><div class="w-40">${fld('Late slots start at', `<input id="late" type="time" class="inp" value="${late}">`)}</div><button class="btn" onclick="saveLate()">Save</button></div></div>
   <div class="card mb-5 !p-0 overflow-x-auto"><div class="p-4"><h2 class="font-bold text-lg mb-1">Which age groups can book which levels</h2><p class="text-xs text-slate-500">Untick to stop an age group booking that level. Staff can still assign slots manually. Age groups come from your teams.</p></div>
     <table class="w-full text-sm"><thead><tr><th class="th" rowspan="2">Age group</th>${TIERS.map(t => `<th class="th text-center" colspan="2">${t}</th>`).join('')}</tr>
     <tr>${TIERS.map(() => '<th class="th text-center font-normal">Regular</th><th class="th text-center font-normal">Late</th>').join('')}</tr></thead><tbody>
-    ${S.divs.map((d, i) => row(`<td class="td font-semibold">${esc(d)}</td>${TIERS.map(t => `<td class="td text-center"><input type="checkbox" ${r(d,t).allowed?'checked':''} onchange="setRule(${i},'${t}','allowed',this.checked)"></td><td class="td text-center"><input type="checkbox" ${r(d,t).allowed_late?'checked':''} onchange="setRule(${i},'${t}','allowed_late',this.checked)"></td>`).join('')}`)).join('') || '<tr><td colspan="9" class="td text-center text-slate-500 py-6">No age groups yet. Add teams with an age group first.</td></tr>'}</tbody></table></div>
+    ${S.divs.map((d, i) => row(`<td class="td font-semibold">${esc(d)}</td>${TIERS.map(t => `<td class="td text-center"><input type="checkbox" ${r(d,t).allowed?'checked':''} onchange="setRule(${i},'${t}','allowed',this.checked)"></td><td class="td text-center"><input type="checkbox" ${r(d,t).allowed_late?'checked':''} onchange="setRule(${i},'${t}','allowed_late',this.checked)"></td>`).join('')}`)).join('') || '<tr><td colspan="11" class="td text-center text-slate-500 py-6">No age groups yet. Add teams with an age group first.</td></tr>'}</tbody></table></div>
   <div class="card"><h2 class="font-bold text-lg mb-1">Exceptions for a specific diamond</h2><p class="text-xs text-slate-500 mb-3">An exception overrides the grid above, at any time of day, for one age group or one team on one diamond. A team exception beats an age-group exception.</p>
-    ${tbl(['Diamond','Applies to','Rule',''], S.exc.map(x => row(`<td class="td">${esc(x.park_name)} #${esc(x.diamond_number)}</td><td class="td">${who(x)}</td><td class="td">${x.allow ? '<span class="tag bg-emerald-100 text-emerald-800">Allow</span>' : '<span class="tag bg-red-100 text-red-800">Block</span>'}</td><td class="td text-right"><button class="btnr" onclick="delExc('${x.id}')">Remove</button></td>`)), 'No exceptions.')}
+    ${tbl(['Diamond','Applies to','Rule',''], S.exc.map(x => row(`<td class="td">${dn(x)}</td><td class="td">${who(x)}</td><td class="td">${x.allow ? '<span class="tag bg-emerald-100 text-emerald-800">Allow</span>' : '<span class="tag bg-red-100 text-red-800">Block</span>'}</td><td class="td text-right"><button class="btnr" onclick="delExc('${x.id}')">Remove</button></td>`)), 'No exceptions.')}
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 items-end mt-3">
-    ${fld('Diamond', `<select id="x-d" class="inp">${S.dm.map((x, i) => `<option value="${i}">${esc(x.park_name)} #${esc(x.diamond_number)}</option>`).join('')}</select>`)}
+    ${fld('Diamond', `<select id="x-d" class="inp">${S.dm.map((x, i) => `<option value="${i}">${dn(x)}</option>`).join('')}</select>`)}
     ${fld('Age group or team', `<select id="x-w" class="inp"><optgroup label="Age groups">${S.divs.map(d => `<option value="d:${esc(d)}">${esc(d)}</option>`).join('')}</optgroup><optgroup label="Teams">${S.teams.map(t => `<option value="t:${t.id}">${esc(t.name)}</option>`).join('')}</optgroup></select>`)}
     ${fld('Rule', '<select id="x-a" class="inp"><option value="true">Allow</option><option value="false">Block</option></select>')}<button class="btn" onclick="addExc()">Add exception</button></div></div>`;
 };
@@ -709,7 +768,7 @@ async function addExc() {
 async function delExc(id) { const { error } = await db.from('diamond_exceptions').delete().eq('id', id); if (error) return toast(error.message, 1); V.dia(); }
 
 /* ---------- SETTINGS ---------- */
-const SK = [...TIERS.map(t => ['cost_' + t.toLowerCase(), `${t} diamond cost, in credits`]), ['cancel_hours','Free cancellation until this many hours before start'],['window_days','Booking window: how many days ahead teams can book'],['max_active','Max active future bookings per team']];
+const SK = [...TIERS.map(t => ['cost_' + t.toLowerCase().replace(/ /g, '_'), `${t} diamond cost, in credits`]), ['cancel_hours','Free cancellation until this many hours before start'],['window_days','Booking window: how many days ahead teams can book'],['max_active','Max active future bookings per team']];
 V.set = async () => {
   await loadSet();
   $('view').innerHTML = `<div class="card max-w-xl"><h2 class="font-bold text-lg mb-3">Booking rules</h2><div class="space-y-3">
@@ -726,7 +785,7 @@ async function saveSet() {
 }
 
 /* ---------- ACCESS CONTROL (admin only) ---------- */
-const PERMS = [['book','Book diamonds for their team'],['view_dashboard','View dashboard'],['view_schedule','View schedule'],['add_slots','Add slots (manual and CSV)'],['assign_slots','Manually assign slots to teams'],['release_slots','Rainout, cancel + reopen, and delete slots'],['add_credits','Add or remove team credits'],['approve_members','Approve team requests'],['manage_teams','Add, rename and edit teams'],['manage_users','Edit users and team memberships'],['manage_diamonds','Add and edit diamonds (Diamond Master)'],['manage_rules','Age and time restrictions, booking settings'],['new_season','Start a new season (reset credits)'],['view_audit','View audit log']];
+const PERMS = [['book','Book diamonds for their team'],['view_dashboard','View dashboard'],['view_schedule','View schedule'],['add_slots','Add slots (manual and CSV)'],['assign_slots','Manually assign slots to teams'],['hold_slots','Place and release holds on slots'],['release_slots','Rainout, cancel + reopen, and delete slots'],['add_credits','Add or remove team credits'],['approve_members','Approve team requests'],['manage_teams','Add, rename and edit teams'],['manage_users','Edit users and team memberships'],['manage_diamonds','Add and edit diamonds (Diamond Master)'],['manage_rules','Booking restrictions and booking settings'],['new_season','Start a new season (reset credits)'],['view_audit','View audit log']];
 V.acc = async () => {
   const { data } = await db.from('permissions').select('*');
   const ok = (p, r) => r === 'admin' || !!(data || []).find(x => x.perm === p && x.role === r)?.allowed;
@@ -751,13 +810,13 @@ V.dm = async () => {
   $('view').innerHTML = `<div class="card mb-5"><h2 class="font-bold text-lg mb-3">Add a diamond</h2>
     <datalist id="parks">${parks.map(p => `<option value="${esc(p)}">`).join('')}</datalist>
     <datalist id="provs">${['ON','AB','BC','MB','NB','NL','NS','NT','NU','PE','QC','SK','YT'].map(p => `<option value="${p}">`).join('')}</datalist>
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 items-end">${fld('Park', '<input id="m-park" list="parks" class="inp">')}${fld('Diamond number or name', '<input id="m-num" class="inp">')}${fld('Level', tierSel('m-tier', 'Standard'))}${fld('Notes', '<input id="m-notes" class="inp">')}
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 items-end">${fld('Park', '<input id="m-park" list="parks" class="inp">')}${fld('Diamond number or name (optional)', '<input id="m-num" class="inp">')}${fld('Level', tierSel('m-tier', 'Standard'))}${fld('Notes', '<input id="m-notes" class="inp">')}
       ${fld('Address', '<input id="m-addr" class="inp" placeholder="123 Main Street">')}${fld('City', '<input id="m-city" class="inp">')}${fld('Province', '<input id="m-prov" list="provs" class="inp" maxlength="20">')}${fld('Postal code', '<input id="m-post" class="inp uppercase" maxlength="10">')}</div>
     <button class="btn mt-3" onclick="addDiamond()">Add diamond</button>
     <div class="flex flex-wrap items-center gap-3 mt-4 pt-4 border-t border-slate-200 text-sm"><b>CSV</b><button class="btn2" onclick="dmCSV()">Download diamonds</button>
     <span class="text-slate-500">Upload columns: park_name, diamond_number, tier, address, city, province, postal_code, active, notes.</span><input type="file" accept=".csv" onchange="upDiamonds(event)"></div></div>
   <h2 class="font-bold text-lg mb-1">Diamonds and levels</h2><p class="text-xs text-slate-500 mb-2">Changing a level updates this diamond's open slots. Booked slots keep the level they were booked at. Inactive diamonds cannot get new slots.</p>
-  ${tbl(['Diamond','Address','Level','Active','Notes',''], S.dm.map(x => row(`<td class="td font-medium">${esc(x.park_name)} #${esc(x.diamond_number)}</td>
+  ${tbl(['Diamond','Address','Level','Active','Notes',''], S.dm.map(x => row(`<td class="td font-medium">${dn(x)}</td>
     <td class="td text-slate-600">${esc(addrOf(x)) || '<span class="text-slate-400">no address</span>'}</td>
     <td class="td"><select class="inp !w-auto" onchange="dmField('${x.id}','tier',this.value)">${TIERS.map(t => `<option ${t===x.tier?'selected':''}>${t}</option>`).join('')}</select></td>
     <td class="td"><input type="checkbox" ${x.active?'checked':''} onchange="dmField('${x.id}','active',this.checked)"></td><td class="td text-slate-600">${esc(x.notes || '')}</td>
@@ -773,7 +832,7 @@ async function addDiamond() {
 function editDiamond(id) {
   const x = S.dm.find(m => m.id === id);
   modal(`<h3 class="font-bold text-lg mb-1">Edit diamond</h3><p class="text-xs text-slate-500 mb-3">Renaming also renames this diamond's existing slots.</p><div class="space-y-3">
-    ${fld('Park', `<input id="e-park" class="inp" value="${esc(x.park_name)}">`)}${fld('Diamond number or name', `<input id="e-num" class="inp" value="${esc(x.diamond_number)}">`)}
+    ${fld('Park', `<input id="e-park" class="inp" value="${esc(x.park_name)}">`)}${fld('Diamond number or name (optional)', `<input id="e-num" class="inp" value="${esc(x.diamond_number)}">`)}
     ${fld('Address', `<input id="e-addr" class="inp" value="${esc(x.address || '')}">`)}
     <div class="grid grid-cols-3 gap-3">${fld('City', `<input id="e-city" class="inp" value="${esc(x.city || '')}">`)}${fld('Province', `<input id="e-prov" class="inp" value="${esc(x.province || '')}">`)}${fld('Postal code', `<input id="e-post" class="inp uppercase" value="${esc(x.postal_code || '')}">`)}</div>
     ${fld('Notes', `<input id="e-notes" class="inp" value="${esc(x.notes || '')}">`)}</div>
@@ -788,10 +847,10 @@ function upDiamonds(e) {
   readObjs(f, async objs => {
     const rows = [], bad = [];
     objs.forEach((o, i) => { const t = TIERS.find(x => x.toLowerCase() === (o.tier || 'standard').toLowerCase());
-      if (!o.park_name || !o.diamond_number || !t) return bad.push(i + 2);
-      rows.push({ association_id: S.aid, park_name: o.park_name, diamond_number: o.diamond_number, tier: t, address: o.address || null, city: o.city || null, province: o.province || null,
+      if (!o.park_name || !t) return bad.push(i + 2);
+      rows.push({ association_id: S.aid, park_name: o.park_name, diamond_number: o.diamond_number || '', tier: t, address: o.address || null, city: o.city || null, province: o.province || null,
         postal_code: (o.postal_code || '').toUpperCase() || null, active: !['false','0','no'].includes((o.active || 'true').toLowerCase()), notes: o.notes || null }); });
-    if (!rows.length) return toast('No valid rows. Each needs park_name, diamond_number and a valid tier.', 1);
+    if (!rows.length) return toast('No valid rows. Each needs a park_name and a valid tier.', 1);
     if (!confirm(`Import ${rows.length} diamond(s)? Existing diamonds are updated.${bad.length ? ` Skipping bad rows: ${bad.join(', ')}.` : ''}`)) return;
     const { error } = await db.from('diamond_master').upsert(rows, { onConflict: 'association_id,park_name,diamond_number' });
     if (error) return toast(error.message, 1);
@@ -862,6 +921,13 @@ async function saveProfile() {
   if (await rpc('update_my_profile', { p_name: $('pf-name').value, p_phone: $('pf-phone').value })) {
     S.profile.full_name = $('pf-name').value.trim() || null; S.profile.phone = $('pf-phone').value.trim() || null; closeModal(); header();
   }
+}
+
+/* ---------- LEVEL DESCRIPTIONS ---------- */
+async function saveDesc(i, v) {
+  const t = TIERS[i], { error } = await db.from('tier_descriptions').upsert({ association_id: S.aid, tier: t, description: v.trim() || null });
+  if (error) return toast(error.message, 1);
+  S.tdesc[t] = v.trim(); audit('Level description', t); toast('Saved.');
 }
 
 /* ---------- LIVE UPDATES ---------- */
