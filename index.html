@@ -47,7 +47,7 @@
 <div id="app" class="hidden">
   <header class="bg-emerald-900 text-white">
     <div class="max-w-6xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
-      <div><div class="font-bold text-lg leading-tight">Diamond Portal</div><div id="who" class="text-xs text-emerald-200"></div></div>
+      <div><div id="ttl" class="font-bold text-lg leading-tight">Diamond Portal</div><div id="who" class="text-xs text-emerald-200"></div></div>
       <div id="hdr" class="flex flex-wrap items-center gap-2"></div>
     </div>
   </header>
@@ -828,25 +828,26 @@ async function saveAssoc(id) {
 }
 
 /* ---------- EVENT FIELDS AND PROFILE ---------- */
-const EVENTS = ['Practice', 'Game', 'Exhibition Game', 'Rescheduled Game'];
+const EVENTS = ['Practice', 'Game', 'Exhibition Game', 'Rescheduled Game', 'Clinic', 'Tryout'];
+const isGameEv = r => ['Game', 'Exhibition Game', 'Rescheduled Game'].includes(r);
 const needsOpp = r => r === 'Game' || r === 'Exhibition Game';
 const evText = d => `${esc(d.booking_reason)}${d.game_number ? ` #${esc(d.game_number)}` : ''}${d.opponent_name ? `<div class="text-xs text-slate-500">vs ${esc(d.opponent_name)}</div>` : ''}`;
 // Event type + (for games) optional game number + opponent chosen from teams or typed in under OTHER
 function evFields(p, cur = {}, excl) {
   const r = cur.reason || 'Practice', teams = S.teams.filter(t => t.active && t.id !== excl), isOther = !!cur.oppName && !cur.oppTeam;
   return `${fld('Event type', `<select id="${p}-r" class="inp" onchange="evChange('${p}')">${EVENTS.map(e => `<option ${e===r?'selected':''}>${e}</option>`).join('')}</select>`)}
-    <div id="${p}-gb" class="space-y-3 mt-3 ${r === 'Practice' ? 'hidden' : ''}">${fld('Game # (optional)', `<input id="${p}-g" class="inp" value="${esc(cur.game || '')}">`)}
+    <div id="${p}-gb" class="space-y-3 mt-3 ${isGameEv(r) ? '' : 'hidden'}">${fld('Game # (optional)', `<input id="${p}-g" class="inp" value="${esc(cur.game || '')}">`)}
     ${fld('Opponent', `<select id="${p}-o" class="inp" onchange="evChange('${p}')"><option value="">Select opponent...</option>${teams.map(t => `<option value="${t.id}" ${t.id===cur.oppTeam?'selected':''}>${esc(t.name)}${t.division ? ' (' + esc(t.division) + ')' : ''}</option>`).join('')}<option value="other" ${isOther?'selected':''}>OTHER (type it in)</option></select>`)}
     <input id="${p}-ox" class="inp ${isOther ? '' : 'hidden'}" placeholder="Opponent name" value="${isOther ? esc(cur.oppName) : ''}"></div>`;
 }
 function evChange(p) {
   const r = $(p + '-r').value;
-  $(p + '-gb').classList.toggle('hidden', r === 'Practice');
+  $(p + '-gb').classList.toggle('hidden', !isGameEv(r));
   $(p + '-ox').classList.toggle('hidden', $(p + '-o').value !== 'other');
   const c = $(p + '-c'); if (c && window._s) c.textContent = calc(window._s, r);
 }
 function evRead(p) {
-  const r = $(p + '-r').value; if (r === 'Practice') return { r, g: null, n: null, t: null };
+  const r = $(p + '-r').value; if (!isGameEv(r)) return { r, g: null, n: null, t: null };
   const g = $(p + '-g').value.trim() || null, v = $(p + '-o').value; let n = null, t = null;
   if (v === 'other') n = $(p + '-ox').value.trim() || null; else if (v) { t = v; n = S.teams.find(x => x.id === v)?.name || null; }
   if (!n && needsOpp(r)) { toast('Select the opponent, or choose OTHER and type it in.', 1); return null; }
