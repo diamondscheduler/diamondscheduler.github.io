@@ -67,7 +67,7 @@ window.addEventListener('error', e => showFatal(e.message + (e.lineno ? ' (line 
 window.addEventListener('unhandledrejection', e => showFatal(e.reason?.message || String(e.reason)));
 const db = window.supabase.createClient('https://srxptffjytjzyobafmkv.supabase.co','sb_publishable_6d3TQR4H_CwT9j1Wg9cMUA_kSkcKYxf');
 const newF = () => ({ from: '', to: '', park: '', st: 'Available', tiers: ['Practice','Standard','Premium','Standard Lit','Premium Lit'], days: [1,2,3,4,5,6,7] });
-const S = {user:null,profile:null,mem:[],myTeams:[],team:null,teams:[],set:{},perms:{},rules:[],exc:[],slots:[],mine:[],all:[],tab:'open',f:newF(),mf:{past:false,future:true,diamond:'',status:''},uf:{q:'',team:'',group:''},aid:null,assoc:null,assocs:[],role:'user',au:null,dm:[],inv:[],tdesc:{},cal:false,cm:new Date(),pend:0,sf:{status:'',park:'',from:''}};
+const S = {user:null,profile:null,mem:[],myTeams:[],team:null,teams:[],set:{},perms:{},rules:[],exc:[],slots:[],mine:[],all:[],tab:'open',f:newF(),mf:{past:false,future:true,diamond:'',status:''},uf:{q:'',team:'',group:''},aid:null,assoc:null,assocs:[],role:'user',au:null,dm:[],inv:[],tdesc:{},cal:false,cm:new Date(),pend:0,sf:{status:'',park:'',from:null,to:''}};
 const V = {};
 const $ = i => document.getElementById(i);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
@@ -465,13 +465,26 @@ async function decide(id, ok) { if (await rpc('decide_membership', { p_member_id
 
 /* ---------- SCHEDULE (informational + actions) ---------- */
 V.sched = async () => {
+  if (S.sf.from === null) S.sf.from = today();   // default: today onward, so past events are hidden
   await expireHolds();
   await Promise.all([loadTeams(), loadMaster(), loadSet()]);
-  const { data } = await db.from('diamonds').select('*,team:teams!booked_by_team_id(division)').gte('date', ymd(addDays(-30)))
-    .order('date').order('start_time').order('park_name').order('diamond_number');
-  S.all = data || []; drawSched();
+  await loadSched(); drawSched();
 };
-const schedList = () => S.all.filter(s => (!S.sf.status || s.status === S.sf.status) && (!S.sf.park || s.park_name === S.sf.park) && (!S.sf.from || s.date >= S.sf.from));
+async function loadSched() {
+  const f = S.sf, all = []; let from = 0;
+  for (;;) {
+    let q = db.from('diamonds').select('*,team:teams!booked_by_team_id(division)').order('date').order('start_time').order('park_name').order('diamond_number').range(from, from + 999);
+    if (f.from) q = q.gte('date', f.from);
+    if (f.to) q = q.lte('date', f.to);
+    const { data, error } = await q;
+    if (error) { toast(error.message, 1); break; }
+    all.push(...data); if (data.length < 1000) break; from += 1000;
+  }
+  S.all = all;
+}
+async function setSchedDates(k, v) { S.sf[k] = v; await loadSched(); drawSched(); }
+async function resetSched() { S.sf = { status: '', park: '', from: today(), to: '' }; await loadSched(); drawSched(); }
+const schedList = () => S.all.filter(s => (!S.sf.status || s.status === S.sf.status) && (!S.sf.park || s.park_name === S.sf.park) && (!S.sf.from || s.date >= S.sf.from) && (!S.sf.to || s.date <= S.sf.to));
 const sbtn = (label, fn, cls = 'btn2') => `<button class="${cls} !py-0.5 !px-2 !text-xs leading-tight" onclick="${fn}">${label}</button>`;
 const when = ts => ts ? new Date(ts).toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' }) : '';
 const byCell = s => s.status === 'On Hold' ? `<b>${esc(s.held_by_name || '')}</b><div class="text-xs text-slate-400">${when(s.held_at)}</div>`
@@ -501,13 +514,15 @@ function drawSched() {
   <div class="card !p-3 grid grid-cols-2 md:grid-cols-5 gap-3 items-end mb-4">
     ${fld('Status', `<select class="inp" onchange="S.sf.status=this.value;drawSched()"><option value="">All</option>${['Available','On Hold','Booked','Rainout'].map(x => `<option ${x===f.status?'selected':''}>${x}</option>`).join('')}</select>`)}
     ${fld('Park', `<select class="inp" onchange="S.sf.park=this.value;drawSched()"><option value="">All</option>${parks.map(p => `<option ${p===f.park?'selected':''}>${esc(p)}</option>`).join('')}</select>`)}
-    ${fld('From date', `<input type="date" class="inp" value="${f.from}" onchange="S.sf.from=this.value;drawSched()">`)}
-    <button class="btn2" onclick="S.sf={status:'',park:'',from:''};drawSched()">Clear</button><button class="btn2" onclick="exportCSV()">Export CSV (${L.length})</button></div>
-  ${tbl(['When','Diamond','Level','Status','Team','Event type','Booked by','Actions'], L.slice(0,300).map(s => row(`<td class="td whitespace-nowrap">${D(s.date)}<br>${timeSpan(s)}</td>
+    ${fld('From date', `<input type="date" class="inp" value="${f.from || ''}" onchange="setSchedDates('from',this.value)">`)}
+    ${fld('To date', `<input type="date" class="inp" value="${f.to || ''}" onchange="setSchedDates('to',this.value)">`)}
+    <button class="btn2" onclick="resetSched()">Reset filters</button><button class="btn2" onclick="setSchedDates('from','')">Show past events</button><button class="btn2" onclick="exportCSV()">Export CSV (${L.length})</button></div>
+  <p class="text-xs text-slate-500 -mt-2 mb-3">${f.from ? `Showing events from ${D(f.from)}${f.to ? ' to ' + D(f.to) : ' onward'}. ` : 'Showing all dates, including past events. '}Clear the From date (or click Show past events) to see earlier events; use To date to narrow to a range.</p>
+  ${tbl(['When','Diamond','Level','Status','Team','Event type','Booked by','Actions'], L.slice(0,500).map(s => row(`<td class="td whitespace-nowrap">${D(s.date)}<br>${timeSpan(s)}</td>
     <td class="td">${dn(s)}</td><td class="td">${tier(s)}</td><td class="td">${stTag(s.status)}</td>
     <td class="td">${s.booked_by_team ? `<b>${esc(s.booked_by_team)}</b>${s.team?.division ? `<div class="text-xs text-slate-500">Age group: ${esc(s.team.division)}</div>` : ''}` : s.status === 'On Hold' ? `<div class="text-xs text-amber-800">${esc(s.hold_comment || 'On hold')}</div>` : '-'}</td>
     <td class="td">${s.booking_reason ? evText(s) : '-'}</td><td class="td">${byCell(s)}</td><td class="td">${acts(s)}</td>`)), 'No slots match.')}
-  ${L.length > 300 ? `<p class="p-3 text-xs text-slate-500">Showing the first 300 of ${L.length}. Use filters to narrow down.</p>` : ''}`;
+  ${L.length > 500 ? `<p class="p-3 text-xs text-slate-500">Showing the first 500 of ${L.length}. Use the filters to narrow down.</p>` : ''}`;
 }
 function detailsModal(id) {
   const s = S.all.find(x => x.id === id), m = dmOf(s), a = addrOf(m), desc = S.tdesc[s.tier];
